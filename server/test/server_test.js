@@ -365,6 +365,8 @@ test('git cloneOrUpdate succeeds on LFS-attributed repos even without git-lfs in
 test('agent-cli reasoning effort maps cleanly across claude, codex, opencode, dsh, and zcode', () => {
   assert.deepStrictEqual(applyAgentCliEffort('claude', ['-p'], 'max'), ['--effort', 'max', '-p']);
   assert.deepStrictEqual(applyAgentCliEffort('codex', ['exec', '-'], 'high'), ['exec', '-c', 'model_reasoning_effort="high"', '-']);
+  assert.deepStrictEqual(applyAgentCliEffort('codex', ['exec', '-'], 'max'), ['exec', '-c', 'model_reasoning_effort="max"', '-']);
+  assert.deepStrictEqual(applyAgentCliEffort('codex', ['exec', '-'], 'ultra'), ['exec', '-c', 'model_reasoning_effort="ultra"', '-']);
   assert.deepStrictEqual(applyAgentCliEffort('opencode', ['run', '-m', 'openai/gpt-5'], 'high'), ['run', '-m', 'openai/gpt-5#high']);
 
   const dshPatch = buildDshModelPatch('deepseek-v4-pro', 'high');

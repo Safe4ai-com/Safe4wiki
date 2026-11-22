@@ -230,6 +230,18 @@ async function api(req, res, url) {
     }
     if (route[1] === 'list') {
       try {
+        if (profile.provider === 'agent-cli' && String(profile.command || '').trim() === 'codex') {
+          const cachePath = path.join(os.homedir(), '.codex', 'models_cache.json');
+          if (fs.existsSync(cachePath)) {
+            const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+            const models = (Array.isArray(cache?.models) ? cache.models : [])
+              .filter(m => m && m.slug && m.visibility !== 'hide')
+              .sort((a, b) => (a.priority ?? 999) - (b.priority ?? 999))
+              .map(m => String(m.slug));
+            if (models.length) return send(res, 200, { models: [...new Set(models)] });
+          }
+          return send(res, 200, { models: [] });
+        }
         if (profile.provider === 'agent-cli' && String(profile.command || '').trim() === 'opencode') {
           const env = { ...process.env, NO_COLOR: '1' };
           const nodeBin = resolveAgentNode(env);

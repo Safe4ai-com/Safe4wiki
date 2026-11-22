@@ -454,7 +454,7 @@ function applyAgentCliEffort(command, args, effort) {
   }
   if (command === 'codex') {
     if (out.some(a => a.includes('model_reasoning_effort'))) return out;
-    const val = e === 'disabled' ? 'low' : e === 'max' ? 'xhigh' : e === 'enabled' ? 'high' : e;
+    const val = e === 'disabled' ? 'low' : e === 'enabled' ? 'high' : e;
     const entry = `model_reasoning_effort=${JSON.stringify(val)}`;
     if (out[0] === 'exec') out.splice(1, 0, '-c', entry);
     else out.unshift('-c', entry);

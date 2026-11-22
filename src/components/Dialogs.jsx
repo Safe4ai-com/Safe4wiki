@@ -21,7 +21,7 @@ export const PRESETS = [
   { group: 'On this computer', id: 'lmstudio', label: 'LM Studio', profile: { provider: 'openai', baseUrl: 'http://localhost:1234/v1', model: 'local-model', contextChars: 48000, maxTokens: 8192 } },
   { group: 'On this computer', id: 'llamacpp-server', label: 'llama.cpp server / vLLM', profile: { provider: 'openai', baseUrl: 'http://localhost:8080/v1', model: 'local-model', contextChars: 48000, maxTokens: 8192 } },
   { group: 'On this computer', id: 'gguf', label: '.gguf file (no server)', profile: { provider: 'llamacpp', modelPath: '', contextSize: 32768, contextChars: 48000, maxTokens: 8192 } },
-  { group: 'Online API', id: 'openai', label: 'OpenAI-compatible API', profile: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini', apiKey: '', contextChars: 120000, maxTokens: 12288, concurrency: 3 } },
+  { group: 'Online API', id: 'openai', label: 'OpenAI-compatible API', profile: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.4-mini', apiKey: '', contextChars: 120000, maxTokens: 12288, concurrency: 3 } },
   { group: 'Online API', id: 'anthropic', label: 'Anthropic-compatible API', profile: { provider: 'anthropic', baseUrl: 'https://api.anthropic.com', model: 'claude-sonnet-5-5', apiKey: '', contextChars: 120000, maxTokens: 12288, concurrency: 3 } },
   { group: 'Online API', id: 'openrouter', label: 'OpenRouter / Groq / DeepSeek / GLM…', profile: { provider: 'openai', baseUrl: 'https://openrouter.ai/api/v1', model: '', apiKey: '', contextChars: 120000, maxTokens: 12288, concurrency: 3 } },
   { group: 'Agent CLI', id: 'deepseek-harness', label: 'DeepSeek Harness', profile: { provider: 'agent-cli', command: 'dsh', args: ['--profile', 'headless', '{prompt}'], env: { DSH_PERMISSION_MODE: 'read-only' }, contextChars: 120000, timeoutMs: 900000 } },
@@ -107,13 +107,13 @@ function cliEffortSpec(command, model) {
   const cmd = String(command || '').trim();
   const m = String(model || '').toLowerCase();
   if (cmd === 'claude') return { via: '--effort', levels: ['low', 'medium', 'high', 'xhigh', 'max'] };
-  if (cmd === 'codex') return { via: '-c model_reasoning_effort', levels: ['low', 'medium', 'high', 'xhigh'] };
-  if (cmd === 'dsh') return { via: '--patch reasoningEffort', levels: ['disabled', 'low', 'medium', 'high'] };
+  if (cmd === 'codex') return { via: '-c model_reasoning_effort', levels: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] };
+  if (cmd === 'dsh') return { via: '--patch reasoningEffort', levels: ['disabled', 'low', 'medium', 'high', 'max'] };
   if (cmd === 'opencode') return { via: '--model #variant', levels: ['low', 'medium', 'high', 'max'], hint: 'Appended as #variant when a model is selected above.' };
   if (cmd === 'zcode') {
     if (/glm-5\.3/.test(m)) return { via: 'provider_config reasoningLevel', levels: ['low', 'high', 'max'] };
     if (/glm-5\.2/.test(m)) return { via: 'provider_config reasoningLevel', levels: ['disabled', 'high', 'max'] };
-    if (/glm-5-turbo|glm-5\.1|glm-4/.test(m)) return { via: 'provider_config reasoningLevel', levels: ['disabled', 'enabled'] };
+    if (/glm-5-turbo|glm-5\.1|glm-5v|glm-4/.test(m)) return { via: 'provider_config reasoningLevel', levels: ['disabled', 'enabled'] };
     return { via: 'provider_config reasoningLevel', levels: ['disabled', 'low', 'high', 'max', 'enabled'] };
   }
   return null;
@@ -124,31 +124,31 @@ const CLI_MODEL_HINTS = {
     via: '--patch',
     defaultLabel: 'CLI default (deepseek-v4-flash)',
     placeholder: 'Leave empty for CLI default (deepseek-v4-flash)',
-    presets: ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-v4-flash-vision-exp'],
+    presets: ['deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-flash', 'deepseek-v4-flash-vision-exp'],
   },
   zcode: {
     via: 'provider_config',
     defaultLabel: 'CLI default',
-    placeholder: 'Leave empty for CLI default (e.g. GLM-5.3)',
-    presets: ['GLM-5.3', 'GLM-5.3-Flash', 'GLM-5.2', 'GLM-5-Turbo'],
+    placeholder: 'Leave empty for CLI default (e.g. GLM-5.3, GLM-5.3-Flash)',
+    presets: ['GLM-5.3', 'GLM-5.3-Flash', 'GLM-5.2', 'GLM-5-Turbo', 'GLM-5.1', 'GLM-5v-Turbo'],
   },
   claude: {
     via: '--model',
     defaultLabel: 'CLI default',
-    placeholder: 'Leave empty for CLI default (e.g. claude-sonnet-4-6, opus)',
-    presets: ['claude-sonnet-4-6', 'claude-opus-4-6', 'claude-haiku-4-5'],
+    placeholder: 'Leave empty for CLI default (e.g. claude-sonnet-5-5, opus, fable)',
+    presets: ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5', 'claude-fable-5-2', 'claude-sonnet-4-6', 'claude-haiku-4-5'],
   },
   codex: {
     via: '--model',
     defaultLabel: 'CLI default',
-    placeholder: 'Leave empty for ~/.codex/config.toml default (e.g. gpt-5.3-codex)',
-    presets: ['gpt-5.3-codex', 'gpt-5.4', 'o3'],
+    placeholder: 'Leave empty for ~/.codex/config.toml default (e.g. gpt-6.2-sol)',
+    presets: ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-6.1-terra', 'gpt-6.1-sol', 'gpt-6-astra', 'gpt-6-luna'],
   },
   gemini: {
     via: '-m',
     defaultLabel: 'CLI default',
-    placeholder: 'Leave empty for CLI default (e.g. gemini-2.5-pro, gemini-2.5-flash)',
-    presets: ['gemini-2.5-pro', 'gemini-2.5-flash'],
+    placeholder: 'Leave empty for CLI default (e.g. gemini-3.8-flash, gemini-3.0-pro)',
+    presets: ['gemini-3.8-flash', 'gemini-3.5-flash-lite', 'gemini-3.0-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
   },
   opencode: {
     via: '-m',
@@ -156,10 +156,11 @@ const CLI_MODEL_HINTS = {
     placeholder: 'Type to search all OpenCode models (e.g. opencode/deepseek-v4.1-flash-free)',
     presets: [
       'opencode/deepseek-v4.1-flash-free',
-      'opencode/big-pickle',
+      'opencode/mimo-v2.6-flash-free',
       'opencode/flint-40b-free',
       'opencode/hy4-flash-free',
-      'deepseek/deepseek-flash',
+      'opencode/big-pickle',
+      'deepseek/deepseek-v4-pro',
     ],
   },
 };
@@ -215,8 +216,9 @@ function ModelConfigModal({
   }, [profile.args]);
 
   useEffect(() => {
-    const isOpencode = profile.provider === 'agent-cli' && String(profile.command || '').trim() === 'opencode';
-    if (!isOpencode && profile.provider !== 'ollama' && !/localhost|127\.0\.0\.1/.test(profile.baseUrl || '')) return;
+    const cliCmd = profile.provider === 'agent-cli' ? String(profile.command || '').trim() : '';
+    const isLiveCli = cliCmd === 'opencode' || cliCmd === 'codex';
+    if (!isLiveCli && profile.provider !== 'ollama' && !/localhost|127\.0\.0\.1/.test(profile.baseUrl || '')) return;
     api.post('/api/models/list', { profile }).then(r => setOllamaModels(r.models || [])).catch(() => setOllamaModels([]));
   }, [profile.provider, profile.baseUrl, profile.command]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -331,9 +333,12 @@ function ModelConfigModal({
             </label>
           </div>
           {cliModelHint && (() => {
-            const liveCliModels = String(p.command || '').trim() === 'opencode' ? ollamaModels : [];
+            const cliCmd = String(p.command || '').trim();
+            const liveCliModels = (cliCmd === 'opencode' || cliCmd === 'codex') ? ollamaModels : [];
             const pills = liveCliModels.length
-              ? [...new Set([...liveCliModels.filter(m => /free|deepseek/i.test(m)).slice(0, 6), ...liveCliModels.slice(0, 6)])].slice(0, 6)
+              ? (cliCmd === 'opencode'
+                ? [...new Set([...liveCliModels.filter(m => /free|deepseek/i.test(m)).slice(0, 6), ...liveCliModels.slice(0, 6)])].slice(0, 6)
+                : liveCliModels.slice(0, 6))
               : cliModelHint.presets;
             return (
               <div className="field">
@@ -370,7 +375,11 @@ function ModelConfigModal({
                   ))}
                 </div>
                 {liveCliModels.length > 0 && (
-                  <small>Loaded {liveCliModels.length} models from <code>opencode models</code> — click the field or type to filter all of them.</small>
+                  <small>
+                    Loaded {liveCliModels.length} models from{' '}
+                    <code>{cliCmd === 'codex' ? '~/.codex/models_cache.json' : 'opencode models'}</code>
+                    {' '}— click the field or type to filter all of them.
+                  </small>
                 )}
               </div>
             );
