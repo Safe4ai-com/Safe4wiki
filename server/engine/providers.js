@@ -657,8 +657,10 @@ function chatAgentCli(profile, messages, opts) {
     child.on('close', code => {
       const cleaned = command === 'opencode' ? cleanOpencodeOutput(out) : out.trim();
       const content = stripThink(cleaned);
-      if (code !== 0 && !content) {
-        const tail = errText.trim().slice(-400);
+      const looksLikeCliError = !content || content.length < 600
+        || /\b(error|unauthorized|forbidden|quota|rate[ _-]?limit|usage limit|5-hour limit|session limit|hit your [^\n]*limit|login|expired|denied)\b/i.test(content);
+      if (code !== 0 && looksLikeCliError) {
+        const tail = (content || errText.trim()).slice(-400);
         const loginCmd = usedZcodeBundle
           ? 'ZCODE_DATA_BASE_DIR=~/.repowiki/zcode-cli ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=/Applications/ZCode.app/Contents/Resources/config/provider/zcode-builtin.json node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs login zai'
           : 'zcode login zai';

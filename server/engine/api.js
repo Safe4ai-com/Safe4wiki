@@ -273,7 +273,7 @@ function newRunId() {
   return `${stamp}-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
 }
 
-const QUOTA_OR_AUTH_RE = /\b(429|401|402)\b|rate[ _-]?limit|quota|credits?|insufficient|project_token_login_failed|unauthorized|billing|limit exceeded|too many requests|overloaded/i;
+const QUOTA_OR_AUTH_RE = /\b(429|401|402)\b|rate[ _-]?limit|quota|credits?|insufficient|project_token_login_failed|unauthorized|billing|limit exceeded|too many requests|overloaded|hit your [^\n]*limit|5-hour limit|usage limit|session limit|limit reached/i;
 
 function isQuotaOrAuthError(message) {
   return QUOTA_OR_AUTH_RE.test(String(message || ''));

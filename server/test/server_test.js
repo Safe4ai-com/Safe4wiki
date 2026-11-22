@@ -413,11 +413,21 @@ test('job scheduler runs cloud/CLI models in parallel with 1 local GPU slot and 
   assert.strictEqual(canStartJob(jVsDup, [jVs], settings), false);
 });
 
-test('pause/resume helpers: quota error detection, pendingPlan promotion, and generatedBy formatting', () => {
+test('pause/resume helpers: quota error detection, pendingPlan promotion, and generatedBy formatting', async () => {
   assert.strictEqual(isQuotaOrAuthError('HTTP 429 Too Many Requests'), true);
   assert.strictEqual(isQuotaOrAuthError('Error: This request requires more credits'), true);
   assert.strictEqual(isQuotaOrAuthError('project_token_login_failed'), true);
+  assert.strictEqual(isQuotaOrAuthError("You've hit your 5-hour limit · resets 11:40pm (Europe/Belgrade)"), true);
   assert.strictEqual(isQuotaOrAuthError('quality validation failed after 3 attempts'), false);
+
+  await assert.rejects(
+    chatDetailed(
+      { provider: 'agent-cli', command: process.execPath, args: ['-e', 'console.log("You\\x27ve hit your 5-hour limit"); process.exit(1);'] },
+      [{ role: 'user', content: 'hi' }],
+      { retries: 0 }
+    ),
+    /exited with 1: You've hit your 5-hour limit/
+  );
 
   assert.strictEqual(
     formatGeneratedBy('opencode', { provider: 'agent-cli', command: 'opencode', model: 'opencode/deepseek-v4.1-flash-free', reasoningEffort: 'high' }),
