@@ -143,10 +143,13 @@ function ModelConfigModal({
   onCancel,
   onRemove,
 }) {
+  const app = useApp();
   const [name, setName] = useState(initialName);
   const [profile, setProfile] = useState(() => ({ ...initialProfile }));
   const [useForWiki, setUseForWiki] = useState(isDefault);
   const [useForChat, setUseForChat] = useState(isChatModel);
+  const [authOnSave, setAuthOnSave] = useState(!!(isNew && initialProfile?.provider === 'agent-cli' && initialProfile?.command === 'zcode'));
+  const [authBusy, setAuthBusy] = useState(false);
   const [ollamaModels, setOllamaModels] = useState([]);
   const [argsText, setArgsText] = useState(() => formatCliArgs(initialProfile.args));
   const [testState, setTestState] = useState(null);
@@ -198,6 +201,19 @@ function ModelConfigModal({
     }
   };
 
+  const runZcodeAuth = async () => {
+    setError('');
+    setAuthBusy(true);
+    try {
+      await api.post('/api/models/zcode-auth', {});
+      app.showToast('Opened Terminal for ZCode sign-in — complete auth in your browser.');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAuthBusy(false);
+    }
+  };
+
   const handleSave = async () => {
     if (isNew && !cleanName) { setError('Enter a profile name.'); return; }
     if (isNew && existingNames.includes(cleanName)) { setError(`A profile named “${cleanName}” already exists.`); return; }
@@ -205,6 +221,11 @@ function ModelConfigModal({
     setSaving(true);
     try {
       await onSave({ name: isNew ? cleanName : initialName, profile, useForWiki, useForChat });
+      if (profile.provider === 'agent-cli' && profile.command === 'zcode' && authOnSave) {
+        api.post('/api/models/zcode-auth', {})
+          .then(() => app.showToast('Opened Terminal for ZCode sign-in — complete auth in your browser.'))
+          .catch(err => app.showToast(err.message));
+      }
     } catch (err) {
       setError(err.message);
       setSaving(false);
@@ -285,10 +306,21 @@ function ModelConfigModal({
           </small>
           {p.command === 'dsh' && <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>DeepSeek Harness uses <code>deepseek-v4-flash</code> by default. Pick a model above (or type <code>provider/model</code>) to override it per run via <code>--patch</code>.</p>}
           {p.command === 'zcode' && (
-            <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
-              ZCode CLI uses an isolated login folder (<code>~/.repowiki/zcode-cli</code>) so ZCode Desktop cannot clear its session. Run once in Terminal:{' '}
-              <code>ZCODE_DATA_BASE_DIR=~/.repowiki/zcode-cli ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=/Applications/ZCode.app/Contents/Resources/config/provider/zcode-builtin.json node /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs login zai</code>
-            </p>
+            <div className="config-card" style={{ marginTop: 4, marginBottom: 12 }}>
+              <div className="config-card-title">ZCode (Z.AI) authentication</div>
+              <p className="muted" style={{ fontSize: 12.5, margin: '0 0 10px', lineHeight: '18px' }}>
+                ZCode CLI signs into an isolated folder (<code>~/.repowiki/zcode-cli</code>) so ZCode Desktop never clears its session. Z.AI OAuth sessions expire after ~5 hours — click below to open Terminal and complete sign-in in your browser.
+              </p>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <button type="button" className="btn btn-blue" style={{ height: 30 }} onClick={runZcodeAuth} disabled={authBusy}>
+                  {authBusy ? 'Opening Terminal…' : 'Sign in to ZCode (Z.AI)'}
+                </button>
+                <label className="check" style={{ marginBottom: 0, fontSize: 12.5 }}>
+                  <input type="checkbox" checked={authOnSave} onChange={e => setAuthOnSave(e.target.checked)} />
+                  <span>Open sign-in in Terminal when saving</span>
+                </label>
+              </div>
+            </div>
           )}
         </>
       ) : p.provider === 'llamacpp' ? (
@@ -557,6 +589,22 @@ export function SettingsDialog({ onClose, initialModel = '', initialTab = 'model
                     </div>
                   </div>
                   {tests[name] && <span className={`pill ${tests[name].state === 'ok' ? 'ok' : tests[name].state === 'bad' ? 'bad' : ''}`} title={tests[name].text}>{tests[name].state === 'running' ? 'testing…' : tests[name].state === 'ok' ? `works · ${tests[name].ms} ms` : 'failed'}</span>}
+                  {p.provider === 'agent-cli' && p.command === 'zcode' && (
+                    <button
+                      type="button"
+                      className="btn"
+                      style={{ height: 28 }}
+                      title="Open Terminal to sign in to ZCode (Z.AI) in your browser"
+                      onClick={e => {
+                        e.stopPropagation();
+                        api.post('/api/models/zcode-auth', {})
+                          .then(() => app.showToast('Opened Terminal for ZCode sign-in — complete auth in your browser.'))
+                          .catch(err => app.showToast(err.message));
+                      }}
+                    >
+                      Auth
+                    </button>
+                  )}
                   <button type="button" className="btn" style={{ height: 28 }} onClick={e => { e.stopPropagation(); test(name); }}>Test</button>
                   <button type="button" className="btn" style={{ height: 28 }} onClick={e => { e.stopPropagation(); openEditor(name); }}>Configure</button>
                 </div>

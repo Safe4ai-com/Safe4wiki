@@ -115,29 +115,54 @@ function readLogTail(file, maxBytes = 200 * 1024) {
   }
 }
 
-function openLogTerminal(logFile) {
-  store.ensureDir(path.dirname(logFile));
-  if (!fs.existsSync(logFile)) fs.writeFileSync(logFile, 'Waiting for log output…\n');
-  const sq = s => `'${String(s).replace(/'/g, `'\\''`)}'`;
-  const tailCmd = `clear; echo "=== Safe4wiki Live Log ==="; tail -n 100 -f ${sq(logFile)}`;
+function sq(s) {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
+function openTerminalCommand(shellCmd, fallbackCmd) {
   return new Promise((resolve, reject) => {
     if (process.platform === 'darwin') {
       const asStr = s => `"${String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
       const script = [
         'tell application "Terminal"',
         '  activate',
-        `  do script ${asStr(tailCmd)}`,
+        `  do script ${asStr(shellCmd)}`,
         'end tell',
       ].join('\n');
       const child = spawn('osascript', ['-e', script], { stdio: ['ignore', 'ignore', 'pipe'] });
       let err = '';
       child.stderr.on('data', d => { err += d; });
       child.on('error', e => reject(new Error(`Could not open Terminal: ${e.message}`)));
-      child.on('close', code => (code === 0 ? resolve({ ok: true, path: logFile }) : reject(new Error(err.trim() || `osascript exited with ${code}`))));
+      child.on('close', code => (code === 0 ? resolve({ ok: true }) : reject(new Error(err.trim() || `osascript exited with ${code}`))));
       return;
     }
-    reject(new Error(`Run in your terminal: tail -f ${sq(logFile)}`));
+    reject(new Error(`Run in your terminal: ${fallbackCmd || shellCmd}`));
   });
+}
+
+function openLogTerminal(logFile) {
+  store.ensureDir(path.dirname(logFile));
+  if (!fs.existsSync(logFile)) fs.writeFileSync(logFile, 'Waiting for log output…\n');
+  const tailCmd = `clear; echo "=== Safe4wiki Live Log ==="; tail -n 100 -f ${sq(logFile)}`;
+  return openTerminalCommand(tailCmd, `tail -f ${sq(logFile)}`).then(() => ({ ok: true, path: logFile }));
+}
+
+function buildZcodeAuthCommand() {
+  const isolated = path.join(store.HOME, 'zcode-cli');
+  store.ensureDir(isolated);
+  const resources = '/Applications/ZCode.app/Contents/Resources';
+  const bundle = path.join(resources, 'glm', 'zcode.cjs');
+  const config = path.join(resources, 'config', 'provider', 'zcode-builtin.json');
+  if (process.platform === 'darwin' && fs.existsSync(bundle) && fs.existsSync(config)) {
+    return `ZCODE_DATA_BASE_DIR=${sq(isolated)} ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=${sq(config)} ${sq(process.execPath)} ${sq(bundle)} login zai`;
+  }
+  return `ZCODE_DATA_BASE_DIR=${sq(isolated)} zcode login zai`;
+}
+
+function openZcodeAuthTerminal() {
+  const loginCmd = buildZcodeAuthCommand();
+  const shellCmd = `clear; echo "=== Safe4wiki · ZCode (Z.AI) Sign-In ==="; echo "Finish sign-in in your browser, then return to Safe4wiki and click Test."; echo ""; ${loginCmd}`;
+  return openTerminalCommand(shellCmd, loginCmd).then(() => ({ ok: true, command: loginCmd }));
 }
 
 /* ---------------- routes ---------------- */
@@ -159,6 +184,13 @@ async function api(req, res, url) {
   }
 
   if (route[0] === 'models' && method === 'POST') {
+    if (route[1] === 'zcode-auth') {
+      try {
+        return send(res, 200, await openZcodeAuthTerminal());
+      } catch (err) {
+        return fail(res, 400, err.message);
+      }
+    }
     const body = await readBody(req);
     const settings = store.loadSettings();
     const saved = settings.models[body.name] || {};
