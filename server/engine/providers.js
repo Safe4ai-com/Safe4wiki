@@ -22,7 +22,8 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // HTTP request with an abort timer (configurable per profile via timeoutMs)
 // and also respect any caller-supplied AbortSignal.
 function requestTimeout(profile, opts) {
-  const ms = Number(opts.timeoutMs ?? profile.timeoutMs ?? 300000);
+  const defaultMs = (profile.provider === 'ollama' || profile.provider === 'llamacpp') ? 900000 : 300000;
+  const ms = Number(opts.timeoutMs ?? profile.timeoutMs ?? defaultMs);
   const signals = [];
   if (Number.isFinite(ms) && ms > 0) signals.push(AbortSignal.timeout(ms));
   if (opts && opts.signal) signals.push(opts.signal);

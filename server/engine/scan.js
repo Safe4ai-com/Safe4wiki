@@ -134,11 +134,19 @@ function scanRepo(repoDir) {
   // Compact indented tree, capped so huge repos don't blow up the prompt
   const tree = buildTreeLines(files);
 
-  // Key project files (truncated) for planning context
+  // Key project files (truncated) for planning context.
+  // Deduplicate by realpath/inode so case-insensitive macOS/Windows filesystems
+  // don't attach both README.md and readme.md twice.
   const keyFiles = {};
+  const seenKeyInodes = new Set();
   for (const name of KEY_FILES) {
     const full = path.join(repoDir, name);
-    if (fs.existsSync(full) && fs.statSync(full).isFile()) {
+    if (fs.existsSync(full)) {
+      const st = fs.statSync(full);
+      if (!st.isFile()) continue;
+      const keyId = st.ino ? `${st.dev}:${st.ino}` : fs.realpathSync(full).toLowerCase();
+      if (seenKeyInodes.has(keyId)) continue;
+      seenKeyInodes.add(keyId);
       let content = fs.readFileSync(full, 'utf8');
       if (content.length > KEY_FILE_TRUNC) content = content.slice(0, KEY_FILE_TRUNC) + '\n... (truncated)';
       keyFiles[name] = content;
