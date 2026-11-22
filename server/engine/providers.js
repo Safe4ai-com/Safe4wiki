@@ -704,6 +704,7 @@ module.exports = {
   chat,
   chatDetailed,
   resolveApiKey,
+  resolveAgentNode,
   ollamaContextSize,
   setProgressHook,
   applyAgentCliModel,

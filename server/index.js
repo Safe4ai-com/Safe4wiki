@@ -17,7 +17,7 @@ const jobs = require('./jobs');
 const rag = require('./rag');
 const { exportSite, exportSingleHtml, zipDir, printPdf } = require('./export');
 const { publish } = require('./publish');
-const { chatDetailed, resolveApiKey } = require('./engine/providers');
+const { chatDetailed, resolveApiKey, resolveAgentNode } = require('./engine/providers');
 const { hostOf } = require('./git');
 
 const PORT = Number(process.env.PORT || 4317);
@@ -156,9 +156,11 @@ function buildCliAuthCommand(command) {
     const bundle = path.join(resources, 'glm', 'zcode.cjs');
     const config = path.join(resources, 'config', 'provider', 'zcode-builtin.json');
     if (process.platform === 'darwin' && fs.existsSync(bundle) && fs.existsSync(config)) {
+      const nodeBin = resolveAgentNode(process.env);
+      if (!nodeBin) throw new Error('ZCode CLI requires Node.js 22.13 or newer (with node:sqlite). Install Node 22+ or 24 via nvm/Homebrew.');
       return {
         label: 'ZCode (Z.AI)',
-        loginCmd: `ZCODE_DATA_BASE_DIR=${sq(isolated)} ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=${sq(config)} ${sq(process.execPath)} ${sq(bundle)} login zai`,
+        loginCmd: `ZCODE_DATA_BASE_DIR=${sq(isolated)} ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=${sq(config)} ${sq(nodeBin)} ${sq(bundle)} login zai`,
       };
     }
     return { label: 'ZCode (Z.AI)', loginCmd: `ZCODE_DATA_BASE_DIR=${sq(isolated)} zcode login zai` };
