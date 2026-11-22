@@ -215,7 +215,7 @@ export default function GenerationStatus({ owner, repo, job, status, onDone, onD
 
   return (
     <div className="gen-card">
-      <h1>{failed ? 'Generation stopped' : 'Writing the wiki…'}</h1>
+      <h1>{paused ? 'Generation paused' : failed ? 'Generation stopped' : 'Writing the wiki…'}</h1>
       <p className="muted" style={{ fontSize: 14, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span>{owner}/{repo}</span>
         {modelLabel && (
