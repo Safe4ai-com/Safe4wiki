@@ -185,11 +185,12 @@ export default function Home() {
         </section>
         <section className="home-about" id="about-safe4wiki" tabIndex={-1}>
           <h2>What is Safe4wiki?</h2>
-          <p>Safe4wiki indexes local folders and private or public Git repositories on your own computer. It works with a local model (Ollama, LM Studio, llama.cpp, or a .gguf file), an OpenAI-compatible or Anthropic API, or a coding agent CLI such as Claude Code, Codex, or Gemini.</p>
+          <p>Safe4wiki turns local folders and private or public Git repositories into deep, citation-verified engineering documentation — running 100% on your own computer. Connect any local model (Ollama, LM Studio, llama.cpp, or a <code>.gguf</code> file), an OpenAI-compatible or Anthropic API, or a coding agent CLI such as Claude Code, Codex, OpenCode, DeepSeek Harness, ZCode, or Gemini.</p>
           <ul>
-            <li>Export the whole wiki to a formatted PDF with every diagram, or to a static website you can publish on your own subdomain.</li>
-            <li>Ask questions about the documentation and the code in the chat box; answers cite the exact files and lines.</li>
-            <li>Switch to the <strong>Examples</strong> tab to inspect four sample wikis and see the output format.</li>
+            <li><strong>Pause, resume &amp; switch models mid-run</strong> — long generations save every completed page and auto-pause on provider rate limits so you can continue right where you left off.</li>
+            <li><strong>Export &amp; publish anywhere</strong> — export a formatted PDF with every Mermaid diagram, a single self-contained offline HTML file, or a static site published directly via SSH, GitHub Pages, Cloudflare Pages, or Netlify.</li>
+            <li><strong>Grounded code chat</strong> — ask questions about the documentation and the code in the chat box; answers cite the exact files and lines.</li>
+            <li><strong>Real example wikis</strong> — switch to the <strong>Examples</strong> tab to inspect complete multi-page wikis generated for <strong>VS Code</strong> and <strong>Playwright</strong>.</li>
           </ul>
         </section>
         <footer className="brand-footer">

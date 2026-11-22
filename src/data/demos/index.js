@@ -1,8 +1,8 @@
 import vscode from './vscode.js';
-import { transformers, playwright, mineru } from './others.js';
+import playwright from './playwright.js';
 
-// Sample wikis shipped with the app (shown until you generate your own).
-export const demoWikis = [vscode, transformers, playwright, mineru];
+// Complete example wikis shipped with Safe4wiki (generated with real models).
+export const demoWikis = [vscode, playwright];
 
 export function findDemo(owner, repo) {
   const key = `${owner}/${repo}`.toLowerCase();

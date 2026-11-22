@@ -34,7 +34,7 @@ We ran a head-to-head comparison on the exact same public repository and commit 
 
 ## Key Features
 
-- **100% Local & Private by Default** — Runs on `localhost:4317`. Works with local folders or private Git repositories (tokens stored locally with `chmod 600` and never exposed to the browser). Ships with 4 built-in public **example wikis** (`vscode`, `transformers`, `playwright`, `MinerU`) so you can explore the UI immediately while your own generated wikis stay private under `~/.repowiki`.
+- **100% Local & Private by Default** — Runs on `localhost:4317`. Works with local folders or private Git repositories (tokens stored locally with `chmod 600` and never exposed to the browser). Ships with 2 complete, real-world **example wikis** (`microsoft/vscode` — 60 pages, `microsoft/playwright` — 49 pages) so you can inspect the full output quality immediately while your own generated wikis stay private under `~/.repowiki`.
 - **Interchangeable AI Backends**
   - **Local models:** Ollama, LM Studio, llama.cpp server, vLLM, or direct `.gguf` inference (`node-llama-cpp`)
   - **Cloud APIs:** Any OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, DeepSeek, GLM, self-hosted) and Anthropic-compatible endpoints
