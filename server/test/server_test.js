@@ -10,7 +10,7 @@ process.env.REPOWIKI_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'repowiki-test
 const http = require('http');
 const store = require('../store');
 const rag = require('../rag');
-const { chatDetailed, ollamaContextSize, applyAgentCliModel, applyAgentCliEffort, normalizeZcodeReasoningLevel, buildDshModelPatch, insertDshPatchArg } = require('../engine/providers');
+const { chatDetailed, ollamaContextSize, applyAgentCliModel, applyAgentCliEffort, cleanOpencodeOutput, normalizeZcodeReasoningLevel, buildDshModelPatch, insertDshPatchArg } = require('../engine/providers');
 const { exportSite, exportSingleHtml, zipDir, orderPages } = require('../export');
 const { autoMaxPages, resolveMaxPages } = require('../engine/api');
 const { normalizePlan } = require('../engine/plan');
@@ -376,4 +376,5 @@ test('agent-cli reasoning effort maps cleanly across claude, codex, opencode, ds
   assert.strictEqual(normalizeZcodeReasoningLevel('GLM-5.2', 'disabled'), 'disabled');
   assert.strictEqual(normalizeZcodeReasoningLevel('GLM-5-Turbo', 'high'), 'enabled');
   assert.strictEqual(normalizeZcodeReasoningLevel('GLM-5-Turbo', 'disabled'), 'disabled');
+  assert.strictEqual(cleanOpencodeOutput('\x1b[32m> build · deepseek-v4.1-flash-free\x1b[0m\n\nready\n'), 'ready');
 });

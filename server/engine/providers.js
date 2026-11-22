@@ -516,6 +516,13 @@ function insertDshPatchArg(args, patchPath) {
   return out;
 }
 
+function cleanOpencodeOutput(text) {
+  return String(text || '')
+    .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+    .replace(/^\s*>\s+[^\n]*·[^\n]*\n+/, '')
+    .trim();
+}
+
 function chatAgentCli(profile, messages, opts) {
   const { spawn } = require('child_process');
   const { constants, existsSync, accessSync, readFileSync, writeFileSync, unlinkSync } = require('fs');
@@ -547,10 +554,11 @@ function chatAgentCli(profile, messages, opts) {
   const args = rawArgs.map(a => a.split('{prompt}').join(prompt));
   const env = { ...process.env, ...(profile.env || {}) };
   let executable = command;
-  if (command === 'dsh' && process.platform !== 'win32') {
+  if ((command === 'dsh' || command === 'opencode') && process.platform !== 'win32') {
     const node = resolveAgentNode(env);
     if (node) env.PATH = [dirname(node), env.PATH].filter(Boolean).join(delimiter);
   }
+  if (command === 'opencode') env.NO_COLOR ||= '1';
   let usedZcodeBundle = false;
   let zcodeDataDir = env.ZCODE_DATA_BASE_DIR || '';
   if (command === 'zcode' && process.platform === 'darwin') {
@@ -646,7 +654,8 @@ function chatAgentCli(profile, messages, opts) {
     child.stderr.on('data', d => { errText += d; if (errText.length > 20000) errText = errText.slice(-20000); });
     child.on('error', err => { finish(new Error(`could not start '${command}': ${err.message}`)); });
     child.on('close', code => {
-      const content = stripThink(out.trim());
+      const cleaned = command === 'opencode' ? cleanOpencodeOutput(out) : out.trim();
+      const content = stripThink(cleaned);
       if (code !== 0 && !content) {
         const tail = errText.trim().slice(-400);
         const loginCmd = usedZcodeBundle
@@ -710,6 +719,7 @@ module.exports = {
   setProgressHook,
   applyAgentCliModel,
   applyAgentCliEffort,
+  cleanOpencodeOutput,
   normalizeZcodeReasoningLevel,
   buildDshModelPatch,
   insertDshPatchArg,

@@ -167,7 +167,11 @@ function buildCliAuthCommand(command) {
   }
   if (cmd === 'claude') return { label: 'Claude Code', loginCmd: 'claude auth login' };
   if (cmd === 'codex') return { label: 'Codex', loginCmd: 'codex login' };
-  if (cmd === 'opencode') return { label: 'OpenCode', loginCmd: 'opencode auth login' };
+  if (cmd === 'opencode') {
+    const nodeBin = resolveAgentNode(process.env);
+    const prefix = nodeBin ? `PATH=${sq(path.dirname(nodeBin))}:$PATH ` : '';
+    return { label: 'OpenCode', loginCmd: `${prefix}opencode auth login` };
+  }
   if (cmd === 'gemini') return { label: 'Gemini CLI', loginCmd: 'gemini' };
   return null;
 }
@@ -226,6 +230,25 @@ async function api(req, res, url) {
     }
     if (route[1] === 'list') {
       try {
+        if (profile.provider === 'agent-cli' && String(profile.command || '').trim() === 'opencode') {
+          const env = { ...process.env, NO_COLOR: '1' };
+          const nodeBin = resolveAgentNode(env);
+          if (nodeBin) env.PATH = [path.dirname(nodeBin), env.PATH].filter(Boolean).join(path.delimiter);
+          const list = await new Promise(resolve => {
+            const child = spawn('opencode', ['models'], { env, stdio: ['ignore', 'pipe', 'ignore'] });
+            let out = '';
+            const t = setTimeout(() => { try { child.kill('SIGTERM'); } catch {} resolve([]); }, 6000);
+            child.stdout.on('data', d => { out += d; });
+            child.on('error', () => { clearTimeout(t); resolve([]); });
+            child.on('close', () => {
+              clearTimeout(t);
+              const lines = out.replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').split(/\r?\n/).map(s => s.trim()).filter(s => /^[A-Za-z0-9._-]+\/[A-Za-z0-9._:@-]+$/.test(s));
+              const score = m => (/^opencode\/.*deepseek.*free/i.test(m) ? 0 : /^opencode\/.*free/i.test(m) ? 1 : /deepseek/i.test(m) ? 2 : /^opencode\//.test(m) ? 3 : 4);
+              resolve([...new Set(lines)].sort((a, b) => score(a) - score(b) || a.localeCompare(b)).slice(0, 300));
+            });
+          });
+          return send(res, 200, { models: list });
+        }
         const base = String(profile.baseUrl || '').replace(/\/+$/, '');
         if (profile.provider === 'ollama') {
           const r = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(4000) });

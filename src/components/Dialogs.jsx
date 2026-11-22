@@ -153,8 +153,14 @@ const CLI_MODEL_HINTS = {
   opencode: {
     via: '-m',
     defaultLabel: 'CLI default',
-    placeholder: 'Leave empty for opencode.json default (e.g. openai/gpt-5.2)',
-    presets: [],
+    placeholder: 'Type to search all OpenCode models (e.g. opencode/deepseek-v4.1-flash-free)',
+    presets: [
+      'opencode/deepseek-v4.1-flash-free',
+      'opencode/big-pickle',
+      'opencode/flint-40b-free',
+      'opencode/hy4-flash-free',
+      'deepseek/deepseek-flash',
+    ],
   },
 };
 
@@ -209,9 +215,10 @@ function ModelConfigModal({
   }, [profile.args]);
 
   useEffect(() => {
-    if (profile.provider !== 'ollama' && !/localhost|127\.0\.0\.1/.test(profile.baseUrl || '')) return;
+    const isOpencode = profile.provider === 'agent-cli' && String(profile.command || '').trim() === 'opencode';
+    if (!isOpencode && profile.provider !== 'ollama' && !/localhost|127\.0\.0\.1/.test(profile.baseUrl || '')) return;
     api.post('/api/models/list', { profile }).then(r => setOllamaModels(r.models || [])).catch(() => setOllamaModels([]));
-  }, [profile.provider, profile.baseUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [profile.provider, profile.baseUrl, profile.command]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const p = profile;
   const set = (k, v) => setProfile(prev => {
@@ -323,30 +330,51 @@ function ModelConfigModal({
               <input className="input" value={argsText} onChange={e => onArgsChange(e.target.value)} placeholder="-p --output-format text" />
             </label>
           </div>
-          {cliModelHint && (
-            <label className="field"><span>Model (passed via <code>{cliModelHint.via}</code>)</span>
-              <input className="input" value={p.model || ''} onChange={e => set('model', e.target.value || undefined)} placeholder={cliModelHint.placeholder} />
-              <div className="preset-pills">
-                <button
-                  type="button"
-                  className={`preset-pill${!p.model ? ' on' : ''}`}
-                  onClick={() => set('model', undefined)}
-                >
-                  {cliModelHint.defaultLabel}
-                </button>
-                {cliModelHint.presets.map(m => (
+          {cliModelHint && (() => {
+            const liveCliModels = String(p.command || '').trim() === 'opencode' ? ollamaModels : [];
+            const pills = liveCliModels.length
+              ? [...new Set([...liveCliModels.filter(m => /free|deepseek/i.test(m)).slice(0, 6), ...liveCliModels.slice(0, 6)])].slice(0, 6)
+              : cliModelHint.presets;
+            return (
+              <div className="field">
+                <span>Model (passed via <code>{cliModelHint.via}</code>)</span>
+                <input
+                  className="input"
+                  list={liveCliModels.length ? `cli-models-${initialName}` : undefined}
+                  value={p.model || ''}
+                  onChange={e => set('model', e.target.value || undefined)}
+                  placeholder={cliModelHint.placeholder}
+                />
+                {liveCliModels.length > 0 && (
+                  <datalist id={`cli-models-${initialName}`}>
+                    {liveCliModels.map(m => <option key={m} value={m} />)}
+                  </datalist>
+                )}
+                <div className="preset-pills">
                   <button
-                    key={m}
                     type="button"
-                    className={`preset-pill${p.model === m ? ' on' : ''}`}
-                    onClick={() => set('model', m)}
+                    className={`preset-pill${!p.model ? ' on' : ''}`}
+                    onClick={() => set('model', undefined)}
                   >
-                    {m}
+                    {cliModelHint.defaultLabel}
                   </button>
-                ))}
+                  {pills.map(m => (
+                    <button
+                      key={m}
+                      type="button"
+                      className={`preset-pill${p.model === m ? ' on' : ''}`}
+                      onClick={() => set('model', m)}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+                {liveCliModels.length > 0 && (
+                  <small>Loaded {liveCliModels.length} models from <code>opencode models</code> — click the field or type to filter all of them.</small>
+                )}
               </div>
-            </label>
-          )}
+            );
+          })()}
           {cliEffort && (
             <div className="field">
               <span>Reasoning effort (passed via <code>{cliEffort.via}</code>)</span>
