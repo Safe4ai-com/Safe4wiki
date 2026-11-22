@@ -1,8 +1,9 @@
 'use strict';
 /**
- * Generation and page-edit jobs. One engine run at a time (local models share
- * one GPU); the rest wait in a queue. Every event is kept so a page opened
- * later can replay the progress.
+ * Generation and page-edit jobs.
+ * Local GPU models (Ollama, llama.cpp, localhost servers) share one GPU slot so
+ * they never thrash VRAM, while cloud APIs and Agent CLIs run in parallel across
+ * different repositories (never two jobs on the same repo at once).
  */
 const { spawn } = require('child_process');
 const crypto = require('crypto');
@@ -11,9 +12,36 @@ const path = require('path');
 const store = require('./store');
 const { cloneOrUpdate, headCommit, hostOf } = require('./git');
 
+const MAX_PARALLEL_JOBS = 4;
 const jobs = new Map();
 const queue = [];
-let running = null;
+const running = new Set();
+
+function jobSlotKey(job, settings) {
+  const models = settings?.models || {};
+  const profile = models[job.model] || models[settings?.default] || null;
+  if (!profile) return 'local-gpu';
+  if (profile.provider === 'ollama' || profile.provider === 'llamacpp') return 'local-gpu';
+  if ((profile.provider === 'openai' || profile.provider === 'anthropic')
+    && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/i.test(String(profile.baseUrl || ''))) {
+    return 'local-gpu';
+  }
+  return null;
+}
+
+function repoKey(job) {
+  return `${job.owner || ''}/${job.repo || ''}`.toLowerCase();
+}
+
+function canStartJob(job, activeJobs, settings, maxParallel = MAX_PARALLEL_JOBS) {
+  const active = Array.isArray(activeJobs) ? activeJobs : [...activeJobs];
+  if (active.length >= maxParallel) return false;
+  const rk = repoKey(job);
+  if (active.some(a => repoKey(a) === rk)) return false;
+  const slot = jobSlotKey(job, settings);
+  if (slot && active.some(a => jobSlotKey(a, settings) === slot)) return false;
+  return true;
+}
 
 function newJob(fields) {
   const job = {
@@ -251,25 +279,36 @@ async function execute(job) {
 }
 
 function pump() {
-  if (running || !queue.length) return;
-  const job = queue.shift();
-  running = job;
-  job.status = 'running';
-  push(job, { type: 'job_started' });
-  execute(job)
-    .then(() => { job.status = 'done'; push(job, { type: 'job_done' }); })
-    .catch(err => { job.status = 'failed'; job.error = err.message; push(job, { type: 'job_error', message: err.message }); })
-    .finally(() => {
-      running = null;
-      require('./rag').invalidate(job.owner, job.repo);
-      setImmediate(pump);
-    });
+  if (!queue.length) return;
+  const settings = store.loadSettings();
+  let i = 0;
+  while (i < queue.length && running.size < MAX_PARALLEL_JOBS) {
+    const job = queue[i];
+    if (!canStartJob(job, running, settings, MAX_PARALLEL_JOBS)) {
+      i++;
+      continue;
+    }
+    queue.splice(i, 1);
+    running.add(job);
+    job.status = 'running';
+    push(job, { type: 'job_started' });
+    execute(job)
+      .then(() => { job.status = 'done'; push(job, { type: 'job_done' }); })
+      .catch(err => { job.status = 'failed'; job.error = err.message; push(job, { type: 'job_error', message: err.message }); })
+      .finally(() => {
+        running.delete(job);
+        require('./rag').invalidate(job.owner, job.repo);
+        setImmediate(pump);
+      });
+  }
 }
 
 function findActiveJob(owner, repo, kind = 'generate') {
   const key = `${owner}/${repo}`.toLowerCase();
-  if (running && running.kind === kind && `${running.owner}/${running.repo}`.toLowerCase() === key) return running;
-  return queue.find(j => j.kind === kind && `${j.owner}/${j.repo}`.toLowerCase() === key) || null;
+  for (const r of running) {
+    if (r.kind === kind && repoKey(r) === key) return r;
+  }
+  return queue.find(j => j.kind === kind && repoKey(j) === key) || null;
 }
 
 function enqueue(fields) {
@@ -294,8 +333,10 @@ function cancel(id) {
   const job = jobs.get(id);
   if (!job) return false;
   const targets = [job];
-  const sameRunning = running && running.id !== job.id && running.owner === job.owner && running.repo === job.repo ? running : null;
-  if (sameRunning) targets.push(sameRunning);
+  for (const r of running) {
+    if (r.id !== job.id && r.owner === job.owner && r.repo === job.repo) targets.push(r);
+  }
+  const hasRunningSibling = targets.length > 1;
   for (const target of targets) {
     target.cancelled = true;
     const qi = queue.indexOf(target);
@@ -304,7 +345,7 @@ function cancel(id) {
       target.status = 'failed';
       target.error = 'Stopped.';
       push(target, { type: 'job_error', message: 'Stopped.' });
-      if (!sameRunning) {
+      if (!hasRunningSibling) {
         const record = store.findWikiRecord(target.owner, target.repo);
         if (record) {
           store.promotePartialStage(record);
@@ -337,4 +378,4 @@ function recoverInterrupted() {
   }
 }
 
-module.exports = { jobs, enqueue, cancel, publicJob, recoverInterrupted, push, findActiveJob };
+module.exports = { jobs, enqueue, cancel, publicJob, recoverInterrupted, push, findActiveJob, jobSlotKey, canStartJob };

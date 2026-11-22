@@ -15,6 +15,7 @@ const { exportSite, exportSingleHtml, zipDir, orderPages } = require('../export'
 const { autoMaxPages, resolveMaxPages } = require('../engine/api');
 const { normalizePlan } = require('../engine/plan');
 const { cloneOrUpdate, run: gitRun } = require('../git');
+const { jobSlotKey, canStartJob } = require('../jobs');
 
 test('settings: keys are hidden from the browser and kept when it saves', () => {
   // Arrange
@@ -377,4 +378,35 @@ test('agent-cli reasoning effort maps cleanly across claude, codex, opencode, ds
   assert.strictEqual(normalizeZcodeReasoningLevel('GLM-5-Turbo', 'high'), 'enabled');
   assert.strictEqual(normalizeZcodeReasoningLevel('GLM-5-Turbo', 'disabled'), 'disabled');
   assert.strictEqual(cleanOpencodeOutput('\x1b[32m> build · deepseek-v4.1-flash-free\x1b[0m\n\nready\n'), 'ready');
+});
+
+test('job scheduler runs cloud/CLI models in parallel with 1 local GPU slot and blocks same-repo duplicates', () => {
+  const settings = {
+    default: 'opencode',
+    models: {
+      opencode: { provider: 'agent-cli', command: 'opencode' },
+      dsh: { provider: 'agent-cli', command: 'dsh' },
+      inkling: { provider: 'ollama', baseUrl: 'http://localhost:11434', model: 'inkling-2-mini' },
+      lmstudio: { provider: 'openai', baseUrl: 'http://127.0.0.1:1234/v1', model: 'local' },
+      cloud: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4.1-mini' },
+    },
+  };
+  const jVs = { owner: 'microsoft', repo: 'vscode', model: 'opencode' };
+  const jPw = { owner: 'microsoft', repo: 'playwright', model: 'inkling' };
+  const jTf = { owner: 'huggingface', repo: 'transformers', model: 'dsh' };
+  const jMu = { owner: 'opendatalab', repo: 'MinerU', model: 'lmstudio' };
+  const jVsDup = { owner: 'microsoft', repo: 'vscode', model: 'cloud' };
+
+  assert.strictEqual(jobSlotKey(jVs, settings), null);
+  assert.strictEqual(jobSlotKey(jPw, settings), 'local-gpu');
+  assert.strictEqual(jobSlotKey(jMu, settings), 'local-gpu');
+
+  // Local Ollama job can start alongside cloud/CLI opencode job
+  assert.strictEqual(canStartJob(jPw, [jVs], settings), true);
+  // Second cloud/CLI job can also run in parallel with opencode + ollama
+  assert.strictEqual(canStartJob(jTf, [jVs, jPw], settings), true);
+  // Second local GPU job waits while inkling holds local-gpu
+  assert.strictEqual(canStartJob(jMu, [jVs, jPw], settings), false);
+  // Same repo cannot run twice in parallel
+  assert.strictEqual(canStartJob(jVsDup, [jVs], settings), false);
 });
