@@ -9,11 +9,32 @@ Part of **[SafeSuite](https://github.com/Safe4ai-com)** — open-source AI engin
 
 Generate deep, citation-grounded repository wikis with Mermaid architecture diagrams, explore your codebase through a hybrid RAG assistant with a live split-view code inspector, export offline single-file HTML or print-quality PDFs, and publish directly to your own subdomain — using **local LLMs**, **cloud APIs**, or **agent CLIs**.
 
+![Safe4wiki Overview](docs/screenshots/wiki-overview.png)
+
+---
+
+## Benchmark: Safe4wiki vs DeepWiki.com
+
+We ran a head-to-head comparison on the exact same public repository and commit — **[`genes8/open-repo-wiki`](https://github.com/genes8/open-repo-wiki) @ `dcfac26`** (101 repository files) — auditing every generated page on disk and live in headless Chrome:
+
+| Metric | **Safe4wiki (Local)** | **DeepWiki.com (Hosted)** |
+|---|---:|---:|
+| **Pages generated** | **34** *(auto-scaled, incl. Glossary & 6 Design Docs)* | 33 |
+| **Documentation depth** | **36,540 words** · **71 structured tables** | ~300–450 words & 0 tables on core pages *(Overview: 341w, Engine: 442w, Providers: 273w)* |
+| **Mermaid diagrams (live Chrome render)** | **38 / 38 rendered (100%, 0 errors)** | **3 broken diagrams** across 4 inspected pages *(incl. both diagrams on LLM Provider Layer)* |
+| **Repository file coverage** | **96 / 101 files (95.0%)** | ~90% |
+| **Verified source citations** | **661 / 662 (99.8%)**, cleanly deduplicated into 1 drawer per page | Mixed unlinked plain-text citations & repeated `Sources:` blocks |
+| **Rendering / formatting defects** | **0** | Unrendered raw LaTeX (`Node.js $\ge$ 18`) + broken diagrams |
+| **Privacy & model choice** | **100% local** — Ollama, LM Studio, GGUF, BYO API, or Agent CLIs | Cloud-hosted only |
+| **Offline export & self-hosting** | Single-file offline HTML, Print PDF, Static ZIP, 1-click Publish | Web viewer only |
+
+> **Why Safe4wiki renders 100% of Mermaid diagrams:** Safe4wiki includes an automatic Mermaid sanitizer + retry renderer and fenced-code parser safeguards so tricky labels (parentheses, colons, inline backticks) still render cleanly as crisp SVGs.
+
 ---
 
 ## Key Features
 
-- **100% Local & Private by Default** — Runs on `localhost:4317`. Works with local folders or private Git repositories (tokens stored locally with `chmod 600` and never exposed to the browser).
+- **100% Local & Private by Default** — Runs on `localhost:4317`. Works with local folders or private Git repositories (tokens stored locally with `chmod 600` and never exposed to the browser). Ships with 4 built-in public **example wikis** (`vscode`, `transformers`, `playwright`, `MinerU`) so you can explore the UI immediately while your own generated wikis stay private under `~/.repowiki`.
 - **Interchangeable AI Backends**
   - **Local models:** Ollama, LM Studio, llama.cpp server, vLLM, or direct `.gguf` inference (`node-llama-cpp`)
   - **Cloud APIs:** Any OpenAI-compatible endpoint (OpenAI, OpenRouter, Groq, DeepSeek, GLM, self-hosted) and Anthropic-compatible endpoints
@@ -33,6 +54,12 @@ Generate deep, citation-grounded repository wikis with Mermaid architecture diag
   - **Print-quality PDF** — cover page, table of contents, and rendered diagrams via Chromium/Playwright
   - **Static Website Export (ZIP or folder)** — with fast client-side search across all pages
   - **Publish to your subdomain** with built-in step-by-step setup guides: **SSH / rsync**, **GitHub Pages** (auto `CNAME` + `.nojekyll`), **Cloudflare Pages**, **Netlify**, or **custom command**
+
+### Architecture Diagrams & Built-in Publishing Guides
+
+![Rendered Mermaid Diagram](docs/screenshots/wiki-diagram.png)
+
+![Publish Setup Guide](docs/screenshots/publish-setup-guide.png)
 
 ---
 
