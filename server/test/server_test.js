@@ -10,7 +10,7 @@ process.env.REPOWIKI_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'repowiki-test
 const http = require('http');
 const store = require('../store');
 const rag = require('../rag');
-const { chatDetailed, ollamaContextSize, applyAgentCliModel, buildDshModelPatch, insertDshPatchArg } = require('../engine/providers');
+const { chatDetailed, ollamaContextSize, applyAgentCliModel, applyAgentCliEffort, normalizeZcodeReasoningLevel, buildDshModelPatch, insertDshPatchArg } = require('../engine/providers');
 const { exportSite, exportSingleHtml, zipDir, orderPages } = require('../export');
 const { autoMaxPages, resolveMaxPages } = require('../engine/api');
 const { normalizePlan } = require('../engine/plan');
@@ -359,4 +359,21 @@ test('git cloneOrUpdate succeeds on LFS-attributed repos even without git-lfs in
   const c2 = await cloneOrUpdate({ url: `file://${origin}`, dir: dest });
   assert.strictEqual(c2.full, c1.full);
   fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('agent-cli reasoning effort maps cleanly across claude, codex, opencode, dsh, and zcode', () => {
+  assert.deepStrictEqual(applyAgentCliEffort('claude', ['-p'], 'max'), ['--effort', 'max', '-p']);
+  assert.deepStrictEqual(applyAgentCliEffort('codex', ['exec', '-'], 'high'), ['exec', '-c', 'model_reasoning_effort="high"', '-']);
+  assert.deepStrictEqual(applyAgentCliEffort('opencode', ['run', '-m', 'openai/gpt-5'], 'high'), ['run', '-m', 'openai/gpt-5#high']);
+
+  const dshPatch = buildDshModelPatch('deepseek-v4-pro', 'high');
+  assert.ok(dshPatch.includes('model: "deepseek-v4-pro"'));
+  assert.ok(dshPatch.includes('reasoningEffort: "high"'));
+  const dshEffortOnly = buildDshModelPatch('', 'low');
+  assert.ok(dshEffortOnly.includes('reasoningEffort: "low"'));
+
+  assert.strictEqual(normalizeZcodeReasoningLevel('GLM-5.3', 'max'), 'max');
+  assert.strictEqual(normalizeZcodeReasoningLevel('GLM-5.2', 'disabled'), 'disabled');
+  assert.strictEqual(normalizeZcodeReasoningLevel('GLM-5-Turbo', 'high'), 'enabled');
+  assert.strictEqual(normalizeZcodeReasoningLevel('GLM-5-Turbo', 'disabled'), 'disabled');
 });

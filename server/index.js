@@ -147,22 +147,34 @@ function openLogTerminal(logFile) {
   return openTerminalCommand(tailCmd, `tail -f ${sq(logFile)}`).then(() => ({ ok: true, path: logFile }));
 }
 
-function buildZcodeAuthCommand() {
-  const isolated = path.join(store.HOME, 'zcode-cli');
-  store.ensureDir(isolated);
-  const resources = '/Applications/ZCode.app/Contents/Resources';
-  const bundle = path.join(resources, 'glm', 'zcode.cjs');
-  const config = path.join(resources, 'config', 'provider', 'zcode-builtin.json');
-  if (process.platform === 'darwin' && fs.existsSync(bundle) && fs.existsSync(config)) {
-    return `ZCODE_DATA_BASE_DIR=${sq(isolated)} ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=${sq(config)} ${sq(process.execPath)} ${sq(bundle)} login zai`;
+function buildCliAuthCommand(command) {
+  const cmd = String(command || '').trim();
+  if (cmd === 'zcode') {
+    const isolated = path.join(store.HOME, 'zcode-cli');
+    store.ensureDir(isolated);
+    const resources = '/Applications/ZCode.app/Contents/Resources';
+    const bundle = path.join(resources, 'glm', 'zcode.cjs');
+    const config = path.join(resources, 'config', 'provider', 'zcode-builtin.json');
+    if (process.platform === 'darwin' && fs.existsSync(bundle) && fs.existsSync(config)) {
+      return {
+        label: 'ZCode (Z.AI)',
+        loginCmd: `ZCODE_DATA_BASE_DIR=${sq(isolated)} ZCODE_BUILTIN_PROVIDER_CONFIG_FILE=${sq(config)} ${sq(process.execPath)} ${sq(bundle)} login zai`,
+      };
+    }
+    return { label: 'ZCode (Z.AI)', loginCmd: `ZCODE_DATA_BASE_DIR=${sq(isolated)} zcode login zai` };
   }
-  return `ZCODE_DATA_BASE_DIR=${sq(isolated)} zcode login zai`;
+  if (cmd === 'claude') return { label: 'Claude Code', loginCmd: 'claude auth login' };
+  if (cmd === 'codex') return { label: 'Codex', loginCmd: 'codex login' };
+  if (cmd === 'opencode') return { label: 'OpenCode', loginCmd: 'opencode auth login' };
+  if (cmd === 'gemini') return { label: 'Gemini CLI', loginCmd: 'gemini' };
+  return null;
 }
 
-function openZcodeAuthTerminal() {
-  const loginCmd = buildZcodeAuthCommand();
-  const shellCmd = `clear; echo "=== Safe4wiki · ZCode (Z.AI) Sign-In ==="; echo "Finish sign-in in your browser, then return to Safe4wiki and click Test."; echo ""; ${loginCmd}`;
-  return openTerminalCommand(shellCmd, loginCmd).then(() => ({ ok: true, command: loginCmd }));
+function openCliAuthTerminal(command) {
+  const info = buildCliAuthCommand(command);
+  if (!info) return Promise.reject(new Error(`No interactive sign-in command configured for '${command || '(empty)'}'.`));
+  const shellCmd = `clear; echo "=== Safe4wiki · ${info.label} Sign-In ==="; echo "Finish sign-in in your browser/terminal, then return to Safe4wiki and click Test."; echo ""; ${info.loginCmd}`;
+  return openTerminalCommand(shellCmd, info.loginCmd).then(() => ({ ok: true, command: info.loginCmd, label: info.label }));
 }
 
 /* ---------------- routes ---------------- */
@@ -184,9 +196,10 @@ async function api(req, res, url) {
   }
 
   if (route[0] === 'models' && method === 'POST') {
-    if (route[1] === 'zcode-auth') {
+    if (route[1] === 'zcode-auth' || route[1] === 'cli-auth') {
+      const body = route[1] === 'cli-auth' ? await readBody(req) : { command: 'zcode' };
       try {
-        return send(res, 200, await openZcodeAuthTerminal());
+        return send(res, 200, await openCliAuthTerminal(body.command || 'zcode'));
       } catch (err) {
         return fail(res, 400, err.message);
       }

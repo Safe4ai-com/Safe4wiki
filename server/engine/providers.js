@@ -441,14 +441,68 @@ function applyAgentCliModel(command, args, model) {
   return out;
 }
 
-function buildDshModelPatch(model) {
+function applyAgentCliEffort(command, args, effort) {
+  const e = String(effort || '').trim().toLowerCase();
+  if (!e) return args;
+  const out = [...args];
+  if (command === 'claude') {
+    if (out.includes('--effort')) return out;
+    const val = e === 'disabled' ? 'low' : e === 'enabled' ? 'high' : e;
+    out.unshift('--effort', val);
+    return out;
+  }
+  if (command === 'codex') {
+    if (out.some(a => a.includes('model_reasoning_effort'))) return out;
+    const val = e === 'disabled' ? 'low' : e === 'max' ? 'xhigh' : e === 'enabled' ? 'high' : e;
+    const entry = `model_reasoning_effort=${JSON.stringify(val)}`;
+    if (out[0] === 'exec') out.splice(1, 0, '-c', entry);
+    else out.unshift('-c', entry);
+    return out;
+  }
+  if (command === 'opencode') {
+    const idx = out.findIndex(a => a === '-m' || a === '--model');
+    if (idx !== -1 && idx + 1 < out.length && !out[idx + 1].includes('#')) {
+      const val = e === 'disabled' ? 'low' : e === 'enabled' ? 'high' : e;
+      out[idx + 1] = `${out[idx + 1]}#${val}`;
+    }
+    return out;
+  }
+  return out;
+}
+
+function normalizeZcodeReasoningLevel(modelId, effort) {
+  const e = String(effort || '').trim().toLowerCase();
+  if (!e) return null;
+  const m = String(modelId || '').toLowerCase();
+  if (/glm-5\.3/.test(m)) {
+    if (['low', 'high', 'max'].includes(e)) return e;
+    if (e === 'disabled') return 'low';
+    if (e === 'xhigh') return 'max';
+    return 'high';
+  }
+  if (/glm-5\.2/.test(m)) {
+    if (['disabled', 'high', 'max'].includes(e)) return e;
+    if (e === 'xhigh') return 'max';
+    return 'high';
+  }
+  // GLM-5-Turbo, GLM-5.1, GLM-4.x use disabled / enabled
+  return e === 'disabled' ? 'disabled' : 'enabled';
+}
+
+function buildDshModelPatch(model, reasoningEffort) {
   const m = String(model || '').trim();
-  if (!m) return null;
+  const effort = String(reasoningEffort || '').trim().toLowerCase();
+  if (!m && !effort) return null;
   const slash = m.indexOf('/');
   const provider = slash > 0 ? m.slice(0, slash).trim() : 'deepseek-official';
-  const modelId = slash > 0 ? m.slice(slash + 1).trim() : m;
+  const modelId = m ? (slash > 0 ? m.slice(slash + 1).trim() : m) : 'deepseek-flash';
   if (!modelId) return null;
-  return `- id: agent-default-model\n  config:\n    provider: ${JSON.stringify(provider)}\n    model: ${JSON.stringify(modelId)}\n`;
+  let yaml = `- id: agent-default-model\n  config:\n    provider: ${JSON.stringify(provider)}\n    model: ${JSON.stringify(modelId)}\n`;
+  if (effort) {
+    const val = effort === 'disabled' ? 'none' : effort === 'enabled' ? 'high' : effort;
+    yaml += `    reasoningEffort: ${JSON.stringify(val)}\n`;
+  }
+  return yaml;
 }
 
 function insertDshPatchArg(args, patchPath) {
@@ -479,8 +533,9 @@ function chatAgentCli(profile, messages, opts) {
     }
   };
   let rawArgs = applyAgentCliModel(command, Array.isArray(profile.args) ? profile.args.map(String) : [], profile.model);
-  if (command === 'dsh' && profile.model && !rawArgs.includes('--patch')) {
-    const patchYaml = buildDshModelPatch(profile.model);
+  rawArgs = applyAgentCliEffort(command, rawArgs, profile.reasoningEffort);
+  if (command === 'dsh' && (profile.model || profile.reasoningEffort) && !rawArgs.includes('--patch')) {
+    const patchYaml = buildDshModelPatch(profile.model, profile.reasoningEffort);
     if (patchYaml) {
       const patchPath = join(tmpdir(), `safe4wiki-dsh-${randomBytes(6).toString('hex')}.yml`);
       writeFileSync(patchPath, patchYaml, { mode: 0o600 });
@@ -520,19 +575,23 @@ function chatAgentCli(profile, messages, opts) {
       usedZcodeBundle = true;
     }
   }
-  if (command === 'zcode' && profile.model && !env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE) {
-    const m = String(profile.model).trim();
+  if (command === 'zcode' && (profile.model || profile.reasoningEffort) && !env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE) {
+    const m = String(profile.model || '').trim();
     const baseDir = zcodeDataDir || homedir();
     const personalPath = join(baseDir, '.zcode', 'v2', 'provider_config.json');
-    if (m && existsSync(personalPath) && env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE) {
+    if (existsSync(personalPath) && env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE) {
       try {
         const parsed = JSON.parse(readFileSync(personalPath, 'utf8'));
+        const existingSel = parsed?.config?.defaultModelSelection || {};
         const slash = m.indexOf('/');
-        const existingProvider = parsed?.config?.defaultModelSelection?.providerId;
-        const providerId = slash > 0 ? m.slice(0, slash).trim() : (existingProvider || 'account:zai-individual-coding-plan');
-        const modelId = slash > 0 ? m.slice(slash + 1).trim() : m;
+        const providerId = m && slash > 0 ? m.slice(0, slash).trim() : (existingSel.providerId || 'account:zai-individual-coding-plan');
+        const modelId = m ? (slash > 0 ? m.slice(slash + 1).trim() : m) : existingSel.modelId;
         if (parsed && typeof parsed.config === 'object' && modelId) {
-          parsed.config.defaultModelSelection = { providerId, modelId };
+          const nextSel = { providerId, modelId };
+          const rl = normalizeZcodeReasoningLevel(modelId, profile.reasoningEffort);
+          if (rl) nextSel.options = { ...(existingSel.options || {}), reasoningLevel: rl };
+          else if (existingSel.options) nextSel.options = existingSel.options;
+          parsed.config.defaultModelSelection = nextSel;
           const overlayPath = join(tmpdir(), `safe4wiki-zcode-${randomBytes(6).toString('hex')}.json`);
           writeFileSync(overlayPath, JSON.stringify(parsed), { mode: 0o600 });
           tempFiles.push(overlayPath);
@@ -648,6 +707,8 @@ module.exports = {
   ollamaContextSize,
   setProgressHook,
   applyAgentCliModel,
+  applyAgentCliEffort,
+  normalizeZcodeReasoningLevel,
   buildDshModelPatch,
   insertDshPatchArg,
   PROVIDERS,

@@ -75,6 +75,50 @@ function formatCliArgs(args) {
   }).join(' ');
 }
 
+const CLI_AUTH_INFO = {
+  zcode: {
+    label: 'ZCode (Z.AI)',
+    button: 'Sign in to ZCode (Z.AI)',
+    note: 'ZCode CLI signs into an isolated folder (~/.repowiki/zcode-cli) so ZCode Desktop never clears it. Z.AI OAuth sessions expire after ~5 hours — click below whenever you need to re-authenticate in your browser.',
+  },
+  claude: {
+    label: 'Claude Code',
+    button: 'Sign in to Claude Code',
+    note: 'Runs `claude auth login` in Terminal and opens Anthropic browser sign-in.',
+  },
+  codex: {
+    label: 'Codex',
+    button: 'Sign in to Codex',
+    note: 'Runs `codex login` in Terminal and opens OpenAI browser sign-in.',
+  },
+  opencode: {
+    label: 'OpenCode',
+    button: 'Sign in to OpenCode',
+    note: 'Runs `opencode auth login` in Terminal to connect your provider credentials.',
+  },
+  gemini: {
+    label: 'Gemini CLI',
+    button: 'Sign in to Gemini CLI',
+    note: 'Launches `gemini` in Terminal so you can complete Google OAuth sign-in if not already authenticated.',
+  },
+};
+
+function cliEffortSpec(command, model) {
+  const cmd = String(command || '').trim();
+  const m = String(model || '').toLowerCase();
+  if (cmd === 'claude') return { via: '--effort', levels: ['low', 'medium', 'high', 'xhigh', 'max'] };
+  if (cmd === 'codex') return { via: '-c model_reasoning_effort', levels: ['low', 'medium', 'high', 'xhigh'] };
+  if (cmd === 'dsh') return { via: '--patch reasoningEffort', levels: ['disabled', 'low', 'medium', 'high'] };
+  if (cmd === 'opencode') return { via: '--model #variant', levels: ['low', 'medium', 'high', 'max'], hint: 'Appended as #variant when a model is selected above.' };
+  if (cmd === 'zcode') {
+    if (/glm-5\.3/.test(m)) return { via: 'provider_config reasoningLevel', levels: ['low', 'high', 'max'] };
+    if (/glm-5\.2/.test(m)) return { via: 'provider_config reasoningLevel', levels: ['disabled', 'high', 'max'] };
+    if (/glm-5-turbo|glm-5\.1|glm-4/.test(m)) return { via: 'provider_config reasoningLevel', levels: ['disabled', 'enabled'] };
+    return { via: 'provider_config reasoningLevel', levels: ['disabled', 'low', 'high', 'max', 'enabled'] };
+  }
+  return null;
+}
+
 const CLI_MODEL_HINTS = {
   dsh: {
     via: '--patch',
@@ -178,6 +222,8 @@ function ModelConfigModal({
   });
   const num = (k, v) => set(k, v === '' ? undefined : Number(v));
   const cliModelHint = p.provider === 'agent-cli' ? CLI_MODEL_HINTS[String(p.command || '').trim()] : null;
+  const cliEffort = p.provider === 'agent-cli' ? cliEffortSpec(p.command, p.model) : null;
+  const cliAuth = p.provider === 'agent-cli' ? CLI_AUTH_INFO[String(p.command || '').trim()] : null;
 
   const onArgsChange = value => {
     setArgsText(value);
@@ -201,12 +247,12 @@ function ModelConfigModal({
     }
   };
 
-  const runZcodeAuth = async () => {
+  const runCliAuth = async () => {
     setError('');
     setAuthBusy(true);
     try {
-      await api.post('/api/models/zcode-auth', {});
-      app.showToast('Opened Terminal for ZCode sign-in — complete auth in your browser.');
+      const r = await api.post('/api/models/cli-auth', { command: p.command });
+      app.showToast(`Opened Terminal for ${r.label || p.command} sign-in — complete auth in your browser.`);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -221,9 +267,9 @@ function ModelConfigModal({
     setSaving(true);
     try {
       await onSave({ name: isNew ? cleanName : initialName, profile, useForWiki, useForChat });
-      if (profile.provider === 'agent-cli' && profile.command === 'zcode' && authOnSave) {
-        api.post('/api/models/zcode-auth', {})
-          .then(() => app.showToast('Opened Terminal for ZCode sign-in — complete auth in your browser.'))
+      if (profile.provider === 'agent-cli' && CLI_AUTH_INFO[String(profile.command || '').trim()] && authOnSave) {
+        api.post('/api/models/cli-auth', { command: profile.command })
+          .then(r => app.showToast(`Opened Terminal for ${r.label || profile.command} sign-in — complete auth in your browser.`))
           .catch(err => app.showToast(err.message));
       }
     } catch (err) {
@@ -301,19 +347,44 @@ function ModelConfigModal({
               </div>
             </label>
           )}
+          {cliEffort && (
+            <div className="field">
+              <span>Reasoning effort (passed via <code>{cliEffort.via}</code>)</span>
+              <div className="preset-pills" style={{ marginTop: 2 }}>
+                <button
+                  type="button"
+                  className={`preset-pill${!p.reasoningEffort ? ' on' : ''}`}
+                  onClick={() => set('reasoningEffort', undefined)}
+                >
+                  CLI default
+                </button>
+                {cliEffort.levels.map(lvl => (
+                  <button
+                    key={lvl}
+                    type="button"
+                    className={`preset-pill${p.reasoningEffort === lvl ? ' on' : ''}`}
+                    onClick={() => set('reasoningEffort', lvl)}
+                  >
+                    {lvl}
+                  </button>
+                ))}
+              </div>
+              {cliEffort.hint && <small>{cliEffort.hint}</small>}
+            </div>
+          )}
           <small className="muted" style={{ display: 'block', marginTop: -6, marginBottom: 12, fontSize: 12 }}>
             Runs inside the repository folder and sends the prompt via stdin or where <code>{'{prompt}'}</code> appears.
           </small>
-          {p.command === 'dsh' && <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>DeepSeek Harness uses <code>deepseek-v4-flash</code> by default. Pick a model above (or type <code>provider/model</code>) to override it per run via <code>--patch</code>.</p>}
-          {p.command === 'zcode' && (
+          {p.command === 'dsh' && <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>DeepSeek Harness uses <code>deepseek-v4-flash</code> by default. Pick a model or reasoning effort above to override it per run via <code>--patch</code>.</p>}
+          {cliAuth && (
             <div className="config-card" style={{ marginTop: 4, marginBottom: 12 }}>
-              <div className="config-card-title">ZCode (Z.AI) authentication</div>
+              <div className="config-card-title">{cliAuth.label} authentication</div>
               <p className="muted" style={{ fontSize: 12.5, margin: '0 0 10px', lineHeight: '18px' }}>
-                ZCode CLI signs into an isolated folder (<code>~/.repowiki/zcode-cli</code>) so ZCode Desktop never clears its session. Z.AI OAuth sessions expire after ~5 hours — click below to open Terminal and complete sign-in in your browser.
+                {cliAuth.note}
               </p>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                <button type="button" className="btn btn-blue" style={{ height: 30 }} onClick={runZcodeAuth} disabled={authBusy}>
-                  {authBusy ? 'Opening Terminal…' : 'Sign in to ZCode (Z.AI)'}
+                <button type="button" className="btn btn-blue" style={{ height: 30 }} onClick={runCliAuth} disabled={authBusy}>
+                  {authBusy ? 'Opening Terminal…' : cliAuth.button}
                 </button>
                 <label className="check" style={{ marginBottom: 0, fontSize: 12.5 }}>
                   <input type="checkbox" checked={authOnSave} onChange={e => setAuthOnSave(e.target.checked)} />
@@ -589,16 +660,16 @@ export function SettingsDialog({ onClose, initialModel = '', initialTab = 'model
                     </div>
                   </div>
                   {tests[name] && <span className={`pill ${tests[name].state === 'ok' ? 'ok' : tests[name].state === 'bad' ? 'bad' : ''}`} title={tests[name].text}>{tests[name].state === 'running' ? 'testing…' : tests[name].state === 'ok' ? `works · ${tests[name].ms} ms` : 'failed'}</span>}
-                  {p.provider === 'agent-cli' && p.command === 'zcode' && (
+                  {p.provider === 'agent-cli' && CLI_AUTH_INFO[String(p.command || '').trim()] && (
                     <button
                       type="button"
                       className="btn"
                       style={{ height: 28 }}
-                      title="Open Terminal to sign in to ZCode (Z.AI) in your browser"
+                      title={`Open Terminal to sign in to ${CLI_AUTH_INFO[String(p.command || '').trim()].label}`}
                       onClick={e => {
                         e.stopPropagation();
-                        api.post('/api/models/zcode-auth', {})
-                          .then(() => app.showToast('Opened Terminal for ZCode sign-in — complete auth in your browser.'))
+                        api.post('/api/models/cli-auth', { command: p.command })
+                          .then(r => app.showToast(`Opened Terminal for ${r.label || p.command} sign-in — complete auth in your browser.`))
                           .catch(err => app.showToast(err.message));
                       }}
                     >

@@ -102,7 +102,12 @@ export default function ChatBox({ repoLabel, onAsk, busy, mode, setMode, model, 
 
 export function describeProfile(p) {
   if (!p) return '';
-  if (p.provider === 'agent-cli') return `Agent CLI · ${p.command}`;
+  if (p.provider === 'agent-cli') {
+    const parts = [`Agent CLI · ${p.command}`];
+    if (p.model) parts.push(p.model);
+    if (p.reasoningEffort) parts.push(`effort: ${p.reasoningEffort}`);
+    return parts.join(' · ');
+  }
   if (p.provider === 'llamacpp') return `GGUF file · ${String(p.modelPath || '').split('/').pop()}`;
   return `${p.model || ''} · ${p.provider === 'ollama' ? 'Ollama' : p.provider === 'anthropic' ? 'Anthropic-style API' : 'OpenAI-style API'}`;
 }
