@@ -215,7 +215,8 @@ async function api(req, res, url) {
     if (route[1] === 'test') {
       const started = Date.now();
       try {
-        const r = await chatDetailed({ ...profile, cwd: os.tmpdir() }, [{ role: 'user', content: 'Reply with exactly one word: ready' }], { retries: 0, maxTokens: 64, timeoutMs: 120000, cwd: os.tmpdir() });
+        const testRetries = (profile.provider === 'agent-cli' && profile.command === 'zcode') ? 1 : 0;
+        const r = await chatDetailed({ ...profile, cwd: os.tmpdir() }, [{ role: 'user', content: 'Reply with exactly one word: ready' }], { retries: testRetries, maxTokens: 64, timeoutMs: 120000, cwd: os.tmpdir() });
         const reply = String(r.content || '').trim();
         if (!/\bready\b/i.test(reply) && reply.length > 40) {
           return fail(res, 400, `Model did not follow the test prompt (check CLI arguments / stdin). Replied: “${reply.slice(0, 180)}”`);
