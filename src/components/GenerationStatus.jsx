@@ -60,16 +60,20 @@ export default function GenerationStatus({ owner, repo, job, status, onDone, onD
   const [liveProgress, setLiveProgress] = useState(job?.progress || null);
   const [state, setState] = useState(status);
   const [retrying, setRetrying] = useState(false);
-  const [stopping, setStopping] = useState(false);
+  const [stopping, setStopping] = useState('');
   const [showLog, setShowLog] = useState(true);
   const [showModelInfo, setShowModelInfo] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const logRef = useRef(null);
 
-  useEffect(() => { setState(status); }, [status]);
+  useEffect(() => {
+    setState(status);
+    setRetrying(false);
+    setStopping('');
+  }, [status, job?.id]);
 
   useEffect(() => {
-    if (state === 'done' || state === 'failed') return undefined;
+    if (state === 'done' || state === 'failed' || state === 'paused') return undefined;
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, [state]);
@@ -86,18 +90,20 @@ export default function GenerationStatus({ owner, repo, job, status, onDone, onD
           setLiveProgress(e);
           return;
         }
-        if (e.type === 'page_start' || e.type === 'page_done' || e.type === 'page_fail' || e.type === 'job_done' || e.type === 'job_error') {
+        if (e.type === 'page_start' || e.type === 'page_done' || e.type === 'page_fail' || e.type === 'job_done' || e.type === 'job_error' || e.type === 'job_paused') {
           setLiveProgress(null);
         }
         setEvents(list => [...list, e]);
         if (e.type === 'job_done') {
           setState('done');
+          setStopping('');
           es.close();
           setTimeout(onDone, 400);
         }
         if (e.type === 'job_paused' || e.type === 'job_error') {
           setState(e.type === 'job_paused' ? 'paused' : 'failed');
-          setStopping(false);
+          setStopping('');
+          setRetrying(false);
           es.close();
           // Reload in case partial pages were promoted and can now be displayed
           setTimeout(onDone, 500);
@@ -188,10 +194,23 @@ export default function GenerationStatus({ owner, repo, job, status, onDone, onD
 
   const pauseJob = async () => {
     if (!job?.id) return;
-    setStopping(true);
+    setStopping('pause');
     try {
       await api.post(`/api/jobs/${encodeURIComponent(job.id)}/pause`, {});
-    } catch { /* ignore */ }
+    } catch {
+      try { await api.post(`/api/jobs/${encodeURIComponent(job.id)}/cancel`, {}); } catch (err) { app.showToast(err.message); setStopping(''); }
+    }
+  };
+
+  const stopJob = async () => {
+    if (!job?.id) return;
+    setStopping('stop');
+    try {
+      await api.post(`/api/jobs/${encodeURIComponent(job.id)}/cancel`, {});
+    } catch (err) {
+      app.showToast(err.message);
+      setStopping('');
+    }
   };
 
   return (
@@ -262,19 +281,24 @@ export default function GenerationStatus({ owner, repo, job, status, onDone, onD
               onClick={() => {
                 setRetrying(true);
                 api.post(`${wikiApiPath(owner, repo)}/refresh`, { model: app.settings?.default || undefined, resume: true })
-                  .then(onDone)
+                  .then(() => { setRetrying(false); onDone(); })
                   .catch(e => { setRetrying(false); app.showToast(e.message); });
               }}
             >
-              {retrying ? 'Resuming…' : paused ? 'Resume' : 'Try again'}
+              {retrying ? 'Starting…' : paused ? 'Resume' : 'Try again'}
             </button>
             <button type="button" className="btn" onClick={() => app.openDialog('settings')}>Model settings</button>
             <button type="button" className="btn btn-danger" onClick={() => app.openDialog('delete', { owner, repo, onDeleted })}>Delete</button>
           </>
         ) : (
-          <button type="button" className="btn" disabled={stopping} onClick={pauseJob} title="Pause and save all completed pages so you can resume later">
-            {stopping ? 'Pausing & saving pages…' : 'Pause'}
-          </button>
+          <>
+            <button type="button" className="btn" disabled={!!stopping} onClick={pauseJob} title="Pause and save all completed pages so you can resume later">
+              {stopping === 'pause' ? 'Pausing & saving…' : 'Pause'}
+            </button>
+            <button type="button" className="btn btn-danger" disabled={!!stopping} onClick={stopJob} title="Stop this generation run">
+              {stopping === 'stop' ? 'Stopping…' : 'Stop'}
+            </button>
+          </>
         )}
         <button type="button" className="btn" onClick={() => setShowLog(v => !v)}>
           {showLog ? 'Hide log' : 'Live log'}
