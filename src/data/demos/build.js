@@ -3,7 +3,7 @@
 // generate the real content locally.
 import { slugify } from '../../lib/wiki.js';
 
-export function buildDemo({ owner, repo, description, stars, commit, lastIndexed, repositoryReadme, tree, pages }) {
+export function buildDemo({ owner, repo, description, stars, commit, lastIndexed, generatedBy, repositoryReadme, tree, pages }) {
   const out = [];
   const walk = (nodes, parent) => {
     for (const node of nodes) {
@@ -25,6 +25,7 @@ export function buildDemo({ owner, repo, description, stars, commit, lastIndexed
     sample: true,
     lastIndexed,
     commit,
+    generatedBy: generatedBy || '',
     source: { type: 'github', url: `https://github.com/${owner}/${repo}`, commit },
     pages: out,
   };

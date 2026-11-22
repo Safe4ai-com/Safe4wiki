@@ -85,6 +85,7 @@ export default function PrintView() {
               {wiki.description && <p className="desc">{wiki.description}</p>}
               <div className="facts">
                 <div>{ordered.length} pages</div>
+                {(wiki.generatedBy || wiki.model) && <div>Model: {wiki.generatedBy || wiki.model}</div>}
                 {wiki.commit && <div>Source revision {String(wiki.commit).slice(0, 7)}</div>}
                 <div>Indexed {formatDate(wiki.lastIndexed) || '—'} · exported {formatDate(today)}</div>
                 <div>Generated with Safe4wiki · safe4ai.com</div>

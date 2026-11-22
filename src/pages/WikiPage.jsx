@@ -40,12 +40,18 @@ export function useWiki(owner, repo) {
 function Sidebar({ ordered, current, base, wiki, onPick }) {
   const shortCommit = wiki.commit && String(wiki.commit).slice(0, wiki.sample ? 6 : 7);
   const indexedDate = formatDate(wiki.lastIndexed);
+  const modelTag = wiki.generatedBy || wiki.model || '';
   return (
     <>
       <div className="last-indexed">
         Last indexed: {indexedDate ? <time dateTime={wiki.lastIndexed}>{indexedDate}</time> : '—'}
         {shortCommit ? <> (<a href={wiki.source?.type === 'github' ? `${wiki.source.url}/commit/${wiki.commit}` : undefined} target="_blank" rel="noopener noreferrer">{shortCommit}</a>)</> : null}
       </div>
+      {modelTag && (
+        <div className="last-indexed wiki-model-meta" title={`Generated with ${modelTag}`}>
+          Generated with <span>{modelTag}</span>
+        </div>
+      )}
       <ul className="nav-list">
         {ordered.map(p => (
           <li key={p.slug}>
@@ -195,7 +201,7 @@ export default function WikiPage() {
 
   const onRefresh = !app.exported
     ? () => (origin === 'local' && app.server
-      ? api.post(`${wikiApiPath(owner, repo)}/refresh`, { model: defaultModelName || undefined }).then(reload).catch(e => app.showToast(e.message))
+      ? api.post(`${wikiApiPath(owner, repo)}/refresh`, { model: defaultModelName || undefined, resume: status === 'paused' || status === 'failed' }).then(reload).catch(e => app.showToast(e.message))
       : app.openDialog('add', { prefill: { kind: 'git', url: `https://github.com/${owner}/${repo}` }, onStarted: reload }))
     : null;
 
@@ -207,21 +213,26 @@ export default function WikiPage() {
   let main;
   if (loading) main = <div className="wiki-content muted" style={{ fontSize: 14 }}>Loading…</div>;
   else if (error) main = <div className="wiki-content"><div className="notice err">{error}</div></div>;
-  else if (status === 'generating' || status === 'queued' || (status === 'failed' && !wiki)) {
+  else if (status === 'generating' || status === 'queued' || ((status === 'failed' || status === 'paused') && !wiki)) {
     main = <GenerationStatus owner={owner} repo={repo} job={job} status={status} onDone={reload} onDeleted={() => navigate('/')} />;
   } else if (!wiki) main = <NotGenerated owner={owner} repo={repo} />;
   else if (current) {
     main = (
       <div className="wiki-content">
-        {status === 'failed' && (
+        {(status === 'failed' || status === 'paused') && (
           <div className="notice warn partial-banner">
             <div>
-              <strong>Showing {ordered.length} generated page{ordered.length === 1 ? '' : 's'} so far.</strong>{' '}
-              {job?.error || 'The last run stopped before finishing all pages.'}
+              <strong>
+                {status === 'paused' ? 'Paused · ' : ''}
+                Showing {ordered.length}{wiki.plannedPages && wiki.plannedPages > ordered.length ? ` of ${wiki.plannedPages}` : ''} generated page{ordered.length === 1 ? '' : 's'} so far.
+              </strong>{' '}
+              {job?.error || (status === 'paused' ? 'Click Resume to continue from where it stopped (you can also switch models in Settings first).' : 'The last run stopped before finishing all pages.')}
             </div>
             <div className="partial-actions">
               {onRefresh && (
-                <button type="button" className="btn btn-blue" onClick={onRefresh}>Continue generating</button>
+                <button type="button" className="btn btn-blue" onClick={onRefresh}>
+                  {status === 'paused' ? 'Resume' : 'Continue generating'}
+                </button>
               )}
               {app.server && origin === 'local' && (
                 <button

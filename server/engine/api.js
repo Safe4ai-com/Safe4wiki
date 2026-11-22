@@ -271,6 +271,12 @@ function newRunId() {
   return `${stamp}-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
 }
 
+const QUOTA_OR_AUTH_RE = /\b(429|401|402)\b|rate[ _-]?limit|quota|credits?|insufficient|project_token_login_failed|unauthorized|billing|limit exceeded|too many requests|overloaded/i;
+
+function isQuotaOrAuthError(message) {
+  return QUOTA_OR_AUTH_RE.test(String(message || ''));
+}
+
 function planSnapshot(pages) {
   return {
     pages: (pages || []).map(page => ({
@@ -543,7 +549,25 @@ async function generateWiki(repoDir, options = {}, onEvent = () => {}) {
     emit('plan_started', {});
     let normalized;
     let pages;
-    if (wikiPlan && wikiPlan.repowiki.documents.length) {
+    const savedPendingPlan = opts.resume && !opts.force && Array.isArray(state.pendingPlan) && state.pendingPlan.length
+      ? state.pendingPlan
+      : null;
+    if (savedPendingPlan) {
+      normalized = normalizePlan(savedPendingPlan, effectiveScan, {
+        maxPages: Math.max(maxPages, savedPendingPlan.length),
+        ensureCoverage: false,
+        requireOverview: false,
+        mergeSingletons: false,
+      });
+      pages = normalized.pages;
+      diagnostics.acceptPlan(planSnapshot(pages));
+      emit('run_note', { message: `Resuming saved plan (${pages.length} pages) — skipping re-planning` });
+      emit('plan_ready', {
+        pages: pages.map(p => ({ path: p.path, title: p.title })),
+        coverage: (normalized.coverage && normalized.coverage.assigned.length) || 0,
+        resumed: true,
+      });
+    } else if (wikiPlan && wikiPlan.repowiki.documents.length) {
       // strict mode: fixed page list, LLM only assigns files (1 call, up to 3 attempts)
       let assignment = null;
       for (let attempt = 1; attempt <= 3 && !assignment; attempt++) {
@@ -714,17 +738,30 @@ async function generateWiki(repoDir, options = {}, onEvent = () => {}) {
       atomicWrite(statePath, `${JSON.stringify(state, null, 2)}\n`);
     };
 
+    // Persist the accepted plan immediately so Pause / Auto-Pause can resume
+    // from the exact next unfinished page without re-running Stage 1 planning.
+    state.pendingPlan = pages.map(p => ({
+      path: p.path,
+      title: p.title,
+      description: p.description || '',
+      files: Array.isArray(p.files) ? p.files : [],
+    }));
+    saveState();
+
     const concurrency = Math.max(1, parseInt(opts.concurrency, 10)
       || profile.concurrency || config.concurrency || 1);
     if (concurrency > 1) emit('run_note', { message: `concurrency: ${concurrency}` });
 
     let ok = 0, skipped = 0, degraded = 0, failed = 0;
+    let consecutiveLimitFails = 0;
+    let autoPausedReason = null;
     const currentPaths = new Set(pages.map(p => p.path));
 
     const mainPages = pages.filter(p => !p._landing);
     const landingPages = pages.filter(p => p._landing);
 
     const processPage = async (page) => {
+      if (autoPausedReason) return;
       const managedOutput = safeManagedPath(outDir, page.path);
       if (!managedOutput) {
         page._publishedMetadata = null;
@@ -786,6 +823,19 @@ async function generateWiki(repoDir, options = {}, onEvent = () => {}) {
       const priorMeta = existingMetadata;
       const outputMismatch = !!(priorMeta && priorMeta.outputHash && liveContent
         && priorMeta.outputHash !== liveContent);
+      // In Resume mode, preserve any non-degraded page already generated on disk
+      // even if the user switched models after hitting a token/rate limit.
+      if (opts.resume && !opts.force && fs.existsSync(outFile) && priorMeta && priorMeta.quality !== 'degraded') {
+        page._publishedMetadata = {
+          ...priorMeta,
+          outputHash: priorMeta.outputHash || liveContent,
+        };
+        page._published = true;
+        state.pageMetadata[page.path] = page._publishedMetadata;
+        skipped++;
+        emit('page_done', { path: page.path, status: 'skipped', reason: 'resumed' });
+        return;
+      }
       const inputChanged = opts.force || state.pages[page.path] !== hash || !fs.existsSync(outFile);
       const protectedReason = priorMeta && (priorMeta.curated || outputMismatch)
         ? (priorMeta.curated ? 'curated' : 'externally-modified')
@@ -956,6 +1006,7 @@ async function generateWiki(repoDir, options = {}, onEvent = () => {}) {
           state.pages[page.path] = hash;
           state.pageMetadata[page.path] = publishedMetadata;
           saveState();
+          consecutiveLimitFails = 0;
           ok++;
           emit('page_done', { path: page.path, status: 'generated', chars: md.length, files: attached.length });
         } else if (best) {
@@ -970,6 +1021,7 @@ async function generateWiki(repoDir, options = {}, onEvent = () => {}) {
           delete state.pages[page.path];
           state.pageMetadata[page.path] = publishedMetadata;
           saveState();
+          consecutiveLimitFails = 0;
           degraded++;
           emit('page_done', { path: page.path, status: 'degraded', codes });
         } else {
@@ -981,17 +1033,47 @@ async function generateWiki(repoDir, options = {}, onEvent = () => {}) {
         page._published = !!page._publishedMetadata;
         failed++;
         emit('page_fail', { path: page.path, message: err.message });
+        if (isQuotaOrAuthError(err.message)) {
+          consecutiveLimitFails++;
+          if (consecutiveLimitFails >= 3 && !autoPausedReason) {
+            autoPausedReason = err.message.split('\n')[0].slice(0, 260);
+            saveState();
+            emit('run_paused', {
+              reason: autoPausedReason,
+              completed: ok + skipped + degraded,
+              total: pages.length,
+            });
+          }
+        } else {
+          consecutiveLimitFails = 0;
+        }
       }
     };
 
     const runPool = async (list) => {
       let idx = 0;
       await Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, async () => {
-        while (idx < list.length) await processPage(list[idx++]);
+        while (idx < list.length && !autoPausedReason) await processPage(list[idx++]);
       }));
     };
     await runPool(mainPages);   // children first
-    await runPool(landingPages); // then section landing pages that link them
+    if (!autoPausedReason) await runPool(landingPages); // then section landing pages that link them
+
+    if (autoPausedReason) {
+      saveState();
+      // Keep staging intact so jobs.js promotePartialStage saves every finished
+      // page and the saved pendingPlan into the live wiki for instant Resume.
+      activeTransaction = null;
+      diagnostics.finish('aborted', {
+        planFailures: 0,
+        pageFailures: failed,
+        knowledgeFailures: 0,
+      });
+      throw new ApiError(
+        'paused',
+        `Auto-paused after repeated quota/rate-limit errors (${ok + skipped + degraded}/${pages.length} pages saved): ${autoPausedReason}`
+      );
+    }
 
     const publishedCount = pages.filter(p => p._published).length;
     if (failed > 0 && publishedCount === 0) {
@@ -1040,6 +1122,7 @@ async function generateWiki(repoDir, options = {}, onEvent = () => {}) {
     state.generationSchemaVersion = GENERATION_SCHEMA_VERSION;
     state.generatedAt = new Date().toISOString();
     state.lastSuccessfulPlan = planSnapshot(pages).pages;
+    if (failed === 0) delete state.pendingPlan;
     state.lastRunId = runId;
 
     // --- Catalog + navigable index (meta layer) ---
@@ -1533,5 +1616,6 @@ module.exports = {
   listModels,
   autoMaxPages,
   resolveMaxPages,
+  isQuotaOrAuthError,
   GENERATION_SCHEMA_VERSION,
 };

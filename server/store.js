@@ -201,6 +201,8 @@ function loadWikiContent(record) {
     lastIndexed: record.lastIndexed || catalog.generatedAt,
     commit: record.commit || '',
     model: catalog.model || record.model,
+    generatedBy: record.generatedBy || catalog.generatedBy || catalog.model || record.model || '',
+    plannedPages: record.plannedPages || null,
     source: sourceInfo(record),
     pages,
   };
@@ -249,7 +251,8 @@ function promotePartialStage(record) {
     const metaMap = stageState && stageState.pageMetadata && typeof stageState.pageMetadata === 'object'
       ? stageState.pageMetadata
       : null;
-    if (!metaMap || !Object.keys(metaMap).length) continue;
+    const hasPendingPlan = Array.isArray(stageState?.pendingPlan) && stageState.pendingPlan.length > 0;
+    if ((!metaMap || !Object.keys(metaMap).length) && !hasPendingPlan) continue;
 
     const liveContent = path.join(langDir, 'content');
     const liveMeta = path.join(langDir, 'meta');
@@ -262,7 +265,7 @@ function promotePartialStage(record) {
     if (!liveState.pageMetadata || typeof liveState.pageMetadata !== 'object') liveState.pageMetadata = {};
 
     let promoted = 0;
-    for (const [relPath, meta] of Object.entries(metaMap)) {
+    for (const [relPath, meta] of Object.entries(metaMap || {})) {
       if (!relPath || relPath.includes('..') || path.isAbsolute(relPath)) continue;
       const srcFile = path.resolve(stage.full, relPath);
       const dstFile = path.resolve(liveContent, relPath);
@@ -277,8 +280,9 @@ function promotePartialStage(record) {
       promoted++;
     }
 
-    if (promoted === 0) continue;
+    if (promoted === 0 && !hasPendingPlan) continue;
 
+    if (hasPendingPlan) liveState.pendingPlan = stageState.pendingPlan;
     liveState.model = stageState.model || liveState.model || record.model || '';
     liveState.generatedAt = new Date().toISOString();
     writeJson(liveStatePath, liveState);
@@ -299,6 +303,7 @@ function promotePartialStage(record) {
     const catalog = {
       repo: record.repo,
       model: liveState.model || record.model || '',
+      generatedBy: record.generatedBy || liveState.model || record.model || '',
       language: lang,
       generatedAt: liveState.generatedAt,
       partial: true,
@@ -313,15 +318,15 @@ function promotePartialStage(record) {
         protected: m.curated === true || m.externallyModified === true,
       })),
     };
-    writeJson(path.join(liveMeta, 'catalog.json'), catalog);
+    if (published.length > 0) writeJson(path.join(liveMeta, 'catalog.json'), catalog);
 
     // Clean up promoted stage directories
     const suffix = stage.name.slice('.content.stage-'.length);
     try { fs.rmSync(stage.full, { recursive: true, force: true }); } catch { /* ignore */ }
     try { fs.rmSync(path.join(langDir, `.meta.stage-${suffix}`), { recursive: true, force: true }); } catch { /* ignore */ }
-    return { promoted, total: catalog.pages.length };
+    return { promoted, total: catalog.pages.length, planned: hasPendingPlan ? stageState.pendingPlan.length : 0 };
   }
-  return { promoted: 0, total: 0 };
+  return { promoted: 0, total: 0, planned: 0 };
 }
 
 module.exports = {

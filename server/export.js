@@ -64,6 +64,8 @@ function validateWiki(wiki) {
     description: String(wiki.description || '').slice(0, 1000),
     lastIndexed: wiki.lastIndexed || null,
     commit: String(wiki.commit || '').slice(0, 64),
+    model: String(wiki.model || '').slice(0, 120),
+    generatedBy: String(wiki.generatedBy || wiki.model || '').slice(0, 160),
     source: wiki.source && wiki.source.type === 'github' ? { type: 'github', url: String(wiki.source.url || ''), commit: String(wiki.source.commit || '') } : null,
     pages: wiki.pages.map(p => ({ path: String(p.path), title: String(p.title), parent: p.parent ? String(p.parent) : null, markdown: String(p.markdown || '') })),
   };
@@ -210,6 +212,7 @@ function buildSingleHtmlDocument({ wiki, pages }) {
 
   const metaLine = [
     `${pages.length} pages`,
+    wiki.generatedBy ? `model ${wiki.generatedBy}` : '',
     wiki.commit ? `commit ${String(wiki.commit).slice(0, 7)}` : '',
     indexedDate ? `indexed ${indexedDate}` : '',
     `exported ${exportedDate}`,

@@ -275,6 +275,8 @@ async function api(req, res, url) {
         wikis: store.listWikiRecords().map(r => ({
           owner: r.owner, repo: r.repo, description: r.description, status: r.status,
           source: { type: r.source.type }, lastIndexed: r.lastIndexed, model: r.model,
+          generatedBy: r.generatedBy || r.model || '',
+          plannedPages: r.plannedPages || null,
         })),
       });
     }
@@ -344,7 +346,8 @@ async function api(req, res, url) {
         ? body.model
         : (settings.default && settings.models[settings.default] ? settings.default : record.model);
       if (!model || !settings.models[model]) return fail(res, 400, 'Add a model first in Model settings.');
-      const job = jobs.enqueue({ kind: 'generate', owner: record.owner, repo: record.repo, model, force: !!body.force });
+      const resume = body.force ? false : (body.resume !== undefined ? !!body.resume : (record.status === 'paused' || record.status === 'failed'));
+      const job = jobs.enqueue({ kind: 'generate', owner: record.owner, repo: record.repo, model, force: !!body.force, resume });
       record.status = record.status === 'ready' ? 'generating' : 'queued';
       record.model = model;
       record.jobId = job.id;
@@ -420,6 +423,7 @@ async function api(req, res, url) {
     const job = jobs.jobs.get(route[1]);
     if (!job) return fail(res, 404, 'Unknown job');
     if (route[2] === 'cancel' && method === 'POST') { jobs.cancel(job.id); return send(res, 200, { ok: true }); }
+    if (route[2] === 'pause' && method === 'POST') { jobs.pause(job.id); return send(res, 200, { ok: true }); }
     if (route[2] === 'log' && method === 'GET') {
       const file = job.logFile || store.jobLogFile(job.owner, job.repo);
       return send(res, 200, { path: file, log: readLogTail(file) });
@@ -437,8 +441,8 @@ async function api(req, res, url) {
       const write = e => res.write(`data: ${JSON.stringify(e)}\n\n`);
       for (const e of job.events) write(e);
       if (job.progress) write(job.progress);
-      if (job.status === 'done' || job.status === 'failed') return res.end();
-      const listener = e => { write(e); if (e.type === 'job_done' || e.type === 'job_error') res.end(); };
+      if (job.status === 'done' || job.status === 'failed' || job.status === 'paused') return res.end();
+      const listener = e => { write(e); if (e.type === 'job_done' || e.type === 'job_error' || e.type === 'job_paused') res.end(); };
       job.listeners.add(listener);
       const keep = setInterval(() => res.write(': ping\n\n'), 15000);
       res.on('close', () => { job.listeners.delete(listener); clearInterval(keep); });

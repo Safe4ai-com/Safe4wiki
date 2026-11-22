@@ -12,10 +12,10 @@ const store = require('../store');
 const rag = require('../rag');
 const { chatDetailed, ollamaContextSize, applyAgentCliModel, applyAgentCliEffort, cleanOpencodeOutput, normalizeZcodeReasoningLevel, buildDshModelPatch, insertDshPatchArg } = require('../engine/providers');
 const { exportSite, exportSingleHtml, zipDir, orderPages } = require('../export');
-const { autoMaxPages, resolveMaxPages } = require('../engine/api');
+const { autoMaxPages, resolveMaxPages, isQuotaOrAuthError } = require('../engine/api');
 const { normalizePlan } = require('../engine/plan');
 const { cloneOrUpdate, run: gitRun } = require('../git');
-const { jobSlotKey, canStartJob } = require('../jobs');
+const { jobSlotKey, canStartJob, formatGeneratedBy } = require('../jobs');
 
 test('settings: keys are hidden from the browser and kept when it saves', () => {
   // Arrange
@@ -409,4 +409,40 @@ test('job scheduler runs cloud/CLI models in parallel with 1 local GPU slot and 
   assert.strictEqual(canStartJob(jMu, [jVs, jPw], settings), false);
   // Same repo cannot run twice in parallel
   assert.strictEqual(canStartJob(jVsDup, [jVs], settings), false);
+});
+
+test('pause/resume helpers: quota error detection, pendingPlan promotion, and generatedBy formatting', () => {
+  assert.strictEqual(isQuotaOrAuthError('HTTP 429 Too Many Requests'), true);
+  assert.strictEqual(isQuotaOrAuthError('Error: This request requires more credits'), true);
+  assert.strictEqual(isQuotaOrAuthError('project_token_login_failed'), true);
+  assert.strictEqual(isQuotaOrAuthError('quality validation failed after 3 attempts'), false);
+
+  assert.strictEqual(
+    formatGeneratedBy('opencode', { provider: 'agent-cli', command: 'opencode', model: 'opencode/deepseek-v4.1-flash-free', reasoningEffort: 'high' }),
+    'deepseek-v4.1-flash-free (opencode · high)'
+  );
+  assert.strictEqual(
+    formatGeneratedBy('inkling-2-mini', { provider: 'ollama', model: 'inkling-2-mini:latest' }),
+    'inkling-2-mini:latest (Ollama)'
+  );
+  assert.strictEqual(
+    formatGeneratedBy('claude-code', { provider: 'agent-cli', command: 'claude', model: 'claude-haiku-4-5' }),
+    'claude-haiku-4-5 (claude)'
+  );
+
+  // promotePartialStage carries pendingPlan even when 0 pages were finished yet
+  const rec = { owner: 'pause-org', repo: 'pause-repo', language: 'en', model: 'opencode', generatedBy: 'deepseek-v4.1-flash-free (opencode)', source: { type: 'local', path: '/tmp' } };
+  const langDir = path.join(store.wikiDir(rec.owner, rec.repo), 'en');
+  const stageDir = path.join(langDir, '.content.stage-run1');
+  fs.mkdirSync(stageDir, { recursive: true });
+  fs.writeFileSync(path.join(stageDir, '.state.json'), JSON.stringify({
+    model: 'opencode',
+    pages: {},
+    pageMetadata: {},
+    pendingPlan: [{ path: 'overview.md', title: 'Overview', files: ['README.md'] }, { path: 'guide.md', title: 'Guide', files: ['a.js'] }],
+  }));
+  const res = store.promotePartialStage(rec);
+  assert.strictEqual(res.planned, 2);
+  const liveState = JSON.parse(fs.readFileSync(path.join(langDir, 'content', '.state.json'), 'utf8'));
+  assert.strictEqual(liveState.pendingPlan.length, 2);
 });

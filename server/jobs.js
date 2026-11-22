@@ -156,6 +156,27 @@ function writeRunConfig(record, settings, modelName, repoDir) {
   return file;
 }
 
+function formatGeneratedBy(modelName, profile) {
+  if (!profile) return String(modelName || '');
+  const eff = profile.reasoningEffort ? ` · ${profile.reasoningEffort}` : '';
+  if (profile.provider === 'agent-cli') {
+    const cmd = String(profile.command || modelName || '').trim();
+    const m = String(profile.model || '').trim();
+    if (m) {
+      const shortM = m.includes('/') ? m.split('/').pop() : m;
+      return `${shortM} (${cmd}${eff})`;
+    }
+    return `${modelName || cmd} (${cmd}${eff})`;
+  }
+  if (profile.provider === 'llamacpp') {
+    const f = String(profile.modelPath || '').split('/').pop() || modelName;
+    return `${f} (GGUF)`;
+  }
+  const m = String(profile.model || modelName || '').trim();
+  const prov = profile.provider === 'ollama' ? 'Ollama' : profile.provider === 'anthropic' ? 'Anthropic' : 'API';
+  return m ? `${m} (${prov})` : String(modelName || '');
+}
+
 function runWorker(job, payload) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [path.join(__dirname, 'worker.js'), JSON.stringify(payload)], {
@@ -166,6 +187,7 @@ function runWorker(job, payload) {
     job.child = child;
     let buf = '';
     let failure = null;
+    let failureCode = '';
     child.stdout.on('data', d => {
       buf += d.toString();
       let i;
@@ -175,7 +197,7 @@ function runWorker(job, payload) {
         if (!line) continue;
         let e;
         try { e = JSON.parse(line); } catch { e = { type: 'log', message: line }; }
-        if (e.type === 'worker_error') failure = e.message;
+        if (e.type === 'worker_error') { failure = e.message; failureCode = e.code || ''; }
         else if (e.type !== 'worker_done') push(job, e);
       }
     });
@@ -183,9 +205,19 @@ function runWorker(job, payload) {
     child.stderr.on('data', d => { stderr = (stderr + d.toString()).slice(-4000); });
     child.on('close', code => {
       job.child = null;
-      if (job.cancelled) reject(new Error('Stopped.'));
-      else if (code === 0) resolve();
-      else reject(new Error(failure || stderr.trim().split('\n').pop() || `engine exited with ${code}`));
+      if (job.paused) {
+        const err = new Error('Paused. All completed pages were saved.');
+        err.code = 'paused';
+        reject(err);
+      } else if (job.cancelled) {
+        reject(new Error('Stopped.'));
+      } else if (code === 0) {
+        resolve();
+      } else {
+        const err = new Error(failure || stderr.trim().split('\n').pop() || `engine exited with ${code}`);
+        if (failureCode) err.code = failureCode;
+        reject(err);
+      }
     });
   });
 }
@@ -243,7 +275,9 @@ async function execute(job) {
     await prepareSource(job, record, settings);
     if (!record.description) record.description = readDescription(record.repoDir);
     store.saveWikiRecord(record);
+    if (job.paused) { const e = new Error('Paused.'); e.code = 'paused'; throw e; }
     if (job.cancelled) throw new Error('Stopped.');
+    const modelLabel = formatGeneratedBy(job.model, settings.models?.[job.model]);
     configFile = writeRunConfig(record, settings, job.model, record.repoDir);
     const out = store.contentDir(record);
     await runWorker(job, {
@@ -253,23 +287,31 @@ async function execute(job) {
       model: job.model,
       out,
       force: !!job.force,
+      resume: !!job.resume,
       page: job.page,
       op: job.op,
       instruction: job.instruction,
     });
     record.status = 'ready';
     record.model = job.model;
+    record.generatedBy = modelLabel;
+    delete record.plannedPages;
     if (job.kind !== 'edit') record.lastIndexed = new Date().toISOString();
     store.saveWikiRecord(record);
     try { require('./rag').prewarm(record); } catch { /* ignore */ }
   } catch (err) {
-    const partial = job.kind !== 'edit' ? store.promotePartialStage(record) : { promoted: 0, total: 0 };
+    const isPaused = !!(job.paused || err.code === 'paused');
+    const modelLabel = formatGeneratedBy(job.model, settings.models?.[job.model]);
+    record.generatedBy = record.generatedBy || modelLabel;
+    const partial = job.kind !== 'edit' ? store.promotePartialStage(record) : { promoted: 0, total: 0, planned: 0 };
     if (partial.promoted > 0) {
       record.model = job.model;
+      record.generatedBy = modelLabel;
       record.lastIndexed = new Date().toISOString();
-      push(job, { type: 'run_note', message: `Saved ${partial.promoted} generated page(s) before stopping (${partial.total} total available).` });
+      push(job, { type: 'run_note', message: `Saved ${partial.promoted} generated page(s) (${partial.total}${partial.planned ? ` / ${partial.planned}` : ''} total saved).` });
     }
-    record.status = 'failed';
+    if (partial.planned > 0) record.plannedPages = partial.planned;
+    record.status = isPaused ? 'paused' : 'failed';
     record.error = err.message;
     store.saveWikiRecord(record);
     throw err;
@@ -294,7 +336,12 @@ function pump() {
     push(job, { type: 'job_started' });
     execute(job)
       .then(() => { job.status = 'done'; push(job, { type: 'job_done' }); })
-      .catch(err => { job.status = 'failed'; job.error = err.message; push(job, { type: 'job_error', message: err.message }); })
+      .catch(err => {
+        const isPaused = !!(job.paused || err.code === 'paused');
+        job.status = isPaused ? 'paused' : 'failed';
+        job.error = err.message;
+        push(job, { type: isPaused ? 'job_paused' : 'job_error', message: err.message });
+      })
       .finally(() => {
         running.delete(job);
         require('./rag').invalidate(job.owner, job.repo);
@@ -329,7 +376,7 @@ function enqueue(fields) {
   return job;
 }
 
-function cancel(id) {
+function cancel(id, { pause = false } = {}) {
   const job = jobs.get(id);
   if (!job) return false;
   const targets = [job];
@@ -338,19 +385,21 @@ function cancel(id) {
   }
   const hasRunningSibling = targets.length > 1;
   for (const target of targets) {
+    if (pause) target.paused = true;
     target.cancelled = true;
     const qi = queue.indexOf(target);
     if (qi >= 0) {
       queue.splice(qi, 1);
-      target.status = 'failed';
-      target.error = 'Stopped.';
-      push(target, { type: 'job_error', message: 'Stopped.' });
+      target.status = pause ? 'paused' : 'failed';
+      target.error = pause ? 'Paused.' : 'Stopped.';
+      push(target, { type: pause ? 'job_paused' : 'job_error', message: target.error });
       if (!hasRunningSibling) {
         const record = store.findWikiRecord(target.owner, target.repo);
         if (record) {
-          store.promotePartialStage(record);
-          record.status = 'failed';
-          record.error = 'Stopped.';
+          const partial = store.promotePartialStage(record);
+          if (partial.planned > 0) record.plannedPages = partial.planned;
+          record.status = pause ? 'paused' : 'failed';
+          record.error = target.error;
           store.saveWikiRecord(record);
         }
       }
@@ -360,15 +409,20 @@ function cancel(id) {
   return true;
 }
 
+function pause(id) {
+  return cancel(id, { pause: true });
+}
+
 /** Wikis left "generating" by a previous server run can't still be running. */
 function recoverInterrupted() {
   for (const r of store.listWikiRecords()) {
     const partial = store.promotePartialStage(r);
     if (r.status === 'generating' || r.status === 'queued') {
-      r.status = 'failed';
+      if (partial.planned > 0) r.plannedPages = partial.planned;
+      r.status = (partial.promoted > 0 || partial.planned > 0) ? 'paused' : 'failed';
       r.error = partial.promoted > 0
-        ? `The app was closed while this wiki was being written (${partial.promoted} generated page(s) saved). Press “Continue generating” to finish.`
-        : 'The app was closed while this wiki was being written. Press “Try again”.';
+        ? `Paused when the app closed (${partial.promoted} generated page(s) saved). Click “Resume” to continue without starting over.`
+        : 'The app was closed while this wiki was being written. Click “Resume” or “Try again”.';
       if (partial.promoted > 0 && !r.lastIndexed) r.lastIndexed = new Date().toISOString();
       store.saveWikiRecord(r);
     } else if (partial.promoted > 0) {
@@ -378,4 +432,4 @@ function recoverInterrupted() {
   }
 }
 
-module.exports = { jobs, enqueue, cancel, publicJob, recoverInterrupted, push, findActiveJob, jobSlotKey, canStartJob };
+module.exports = { jobs, enqueue, cancel, pause, publicJob, recoverInterrupted, push, findActiveJob, jobSlotKey, canStartJob, formatGeneratedBy };

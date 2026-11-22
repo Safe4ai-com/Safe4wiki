@@ -42,8 +42,10 @@ export function describeEvent(e) {
       const detail = formatCodes(e.codes);
       return detail ? `Retrying ${e.path} (${detail})` : `Retrying ${e.path}`;
     }
-    case 'page_done': return `${e.status === 'generated' ? 'Wrote' : e.status === 'skipped' ? 'Unchanged' : 'Saved'} ${e.path}${e.chars ? ` (${e.chars} chars)` : ''}`;
+    case 'page_done': return `${e.status === 'generated' ? 'Wrote' : e.status === 'skipped' ? (e.reason === 'resumed' ? 'Kept (already generated)' : 'Unchanged') : 'Saved'} ${e.path}${e.chars ? ` (${e.chars} chars)` : ''}`;
     case 'page_fail': return `Failed ${e.path}: ${e.message}`;
+    case 'run_paused': return `Auto-paused (${e.completed || 0}/${e.total || 0} pages saved): ${e.reason || 'limit reached'}`;
+    case 'job_paused': return e.message || 'Paused.';
     case 'run_finished': return 'Done.';
     case 'run_error': return `Error: ${e.message}`;
     case 'job_error': return `Error: ${e.message}`;
@@ -93,8 +95,8 @@ export default function GenerationStatus({ owner, repo, job, status, onDone, onD
           es.close();
           setTimeout(onDone, 400);
         }
-        if (e.type === 'job_error') {
-          setState('failed');
+        if (e.type === 'job_paused' || e.type === 'job_error') {
+          setState(e.type === 'job_paused' ? 'paused' : 'failed');
           setStopping(false);
           es.close();
           // Reload in case partial pages were promoted and can now be displayed
@@ -130,7 +132,9 @@ export default function GenerationStatus({ owner, repo, job, status, onDone, onD
   const elapsedMs = startedAtMs ? Math.max(0, now - startedAtMs) : 0;
   const stepElapsedMs = lastStepEvent?.ts ? Math.max(0, now - Date.parse(lastStepEvent.ts)) : 0;
 
+  const paused = state === 'paused';
   const failed = state === 'failed';
+  const halted = paused || failed;
   const lines = events
     .map(e => ({ ts: formatTime(e.ts), text: describeEvent(e) }))
     .filter(item => item.text);
@@ -182,11 +186,11 @@ export default function GenerationStatus({ owner, repo, job, status, onDone, onD
     navigator.clipboard?.writeText(text).then(() => app.showToast('Log copied')).catch(() => app.showToast('Copy failed'));
   };
 
-  const stopJob = async () => {
+  const pauseJob = async () => {
     if (!job?.id) return;
     setStopping(true);
     try {
-      await api.post(`/api/jobs/${encodeURIComponent(job.id)}/cancel`, {});
+      await api.post(`/api/jobs/${encodeURIComponent(job.id)}/pause`, {});
     } catch { /* ignore */ }
   };
 
@@ -225,7 +229,7 @@ export default function GenerationStatus({ owner, repo, job, status, onDone, onD
         </div>
       )}
 
-      {!failed && (
+      {!halted && (
         <>
           <div className="gen-stats">
             <strong>
@@ -242,14 +246,14 @@ export default function GenerationStatus({ owner, repo, job, status, onDone, onD
         </>
       )}
 
-      {failed && (
-        <div className="notice err">
-          {job?.error || [...events].reverse().find(e => e.type === 'job_error')?.message || 'The run failed. Check the model settings and try again.'}
+      {halted && (
+        <div className={`notice ${paused ? 'warn' : 'err'}`}>
+          {job?.error || [...events].reverse().find(e => e.type === 'job_paused' || e.type === 'job_error')?.message || (paused ? 'Paused. Click Resume to continue from where it stopped.' : 'The run failed. Check the model settings and try again.')}
         </div>
       )}
 
       <div style={{ display: 'flex', gap: 8, marginTop: 12, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        {failed ? (
+        {halted ? (
           <>
             <button
               type="button"
@@ -257,19 +261,19 @@ export default function GenerationStatus({ owner, repo, job, status, onDone, onD
               disabled={retrying}
               onClick={() => {
                 setRetrying(true);
-                api.post(`${wikiApiPath(owner, repo)}/refresh`, { model: app.settings?.default || undefined })
+                api.post(`${wikiApiPath(owner, repo)}/refresh`, { model: app.settings?.default || undefined, resume: true })
                   .then(onDone)
                   .catch(e => { setRetrying(false); app.showToast(e.message); });
               }}
             >
-              {retrying ? 'Starting…' : 'Try again'}
+              {retrying ? 'Resuming…' : paused ? 'Resume' : 'Try again'}
             </button>
             <button type="button" className="btn" onClick={() => app.openDialog('settings')}>Model settings</button>
             <button type="button" className="btn btn-danger" onClick={() => app.openDialog('delete', { owner, repo, onDeleted })}>Delete</button>
           </>
         ) : (
-          <button type="button" className="btn" disabled={stopping} onClick={stopJob}>
-            {stopping ? 'Stopping & saving pages…' : 'Stop'}
+          <button type="button" className="btn" disabled={stopping} onClick={pauseJob} title="Pause and save all completed pages so you can resume later">
+            {stopping ? 'Pausing & saving pages…' : 'Pause'}
           </button>
         )}
         <button type="button" className="btn" onClick={() => setShowLog(v => !v)}>

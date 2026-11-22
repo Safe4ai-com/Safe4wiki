@@ -17,7 +17,7 @@ console.log = (...a) => emit({ type: 'log', message: a.join(' ') });
 
 (async () => {
   try {
-    const opts = { config: job.config, model: job.model, out: job.out, template: job.template, force: !!job.force };
+    const opts = { config: job.config, model: job.model, out: job.out, template: job.template, force: !!job.force, resume: !!job.resume };
     if (job.kind === 'edit') {
       await modifyWiki(job.repoDir, { ...opts, modify: job.page, op: job.op, instruction: job.instruction }, emit);
     } else {

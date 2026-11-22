@@ -16,7 +16,7 @@ function parseRepoInput(text) {
   return null;
 }
 
-function RepoCard({ owner, repo, description, stars, badge, onDelete }) {
+function RepoCard({ owner, repo, description, stars, badge, modelLabel, onDelete }) {
   return (
     <article className="repo-card repo-card-item">
       <div className="repo-card-top">
@@ -42,6 +42,7 @@ function RepoCard({ owner, repo, description, stars, badge, onDelete }) {
       <div className="repo-card-foot">
         <span className="repo-card-stars">
           {stars ? (<><StarIcon />{stars}</>) : badge ? <span className="repo-card-badge">{badge}</span> : null}
+          {modelLabel && <span className="repo-card-model" title={`Generated with ${modelLabel}`}>{modelLabel}</span>}
         </span>
         <span className="circle-arrow" aria-hidden="true"><ArrowRight /></span>
       </div>
@@ -80,11 +81,14 @@ export default function Home() {
     description: w.description,
     badge: w.status === 'generating' || w.status === 'queued'
       ? 'Generating…'
-      : w.status === 'failed'
-        ? 'Failed'
-        : w.source?.type === 'local'
-          ? 'Local'
-          : 'Git',
+      : w.status === 'paused'
+        ? 'Paused'
+        : w.status === 'failed'
+          ? 'Failed'
+          : w.source?.type === 'local'
+            ? 'Local'
+            : 'Git',
+    modelLabel: w.generatedBy || w.model || '',
     stars: '',
     isLocal: true,
   })), [mine]);
@@ -93,6 +97,7 @@ export default function Home() {
     owner: d.owner,
     repo: d.repo,
     description: d.description,
+    modelLabel: d.generatedBy || '',
     stars: d.stars,
     isLocal: false,
   })), []);
