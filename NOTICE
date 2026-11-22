@@ -1,0 +1,7 @@
+Safe4wiki (part of SafeSuite)
+Copyright 2026 Safe4AI (https://safe4ai.com)
+
+This product includes software developed by Safe4AI (https://safe4ai.com).
+
+The wiki generation engine in `server/engine/` incorporates code from
+open-repo-wiki (MIT License — see `server/engine/LICENSE-open-repo-wiki`).

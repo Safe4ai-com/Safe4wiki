@@ -1,0 +1,36 @@
+// Navigation trees of the sample wikis (page titles only).
+export const transformersTree = [["Overview", ["Getting Started & Installation", "Design Philosophy & V5 Migration Guide", "Documentation Structure & Translations"]],
+  ["Core Architecture", ["PreTrainedModel & PreTrainedConfig", "Auto Classes & Lazy-Loading Factory", "Model Weight Loading & Conversion", "Common Modeling Layers & Utilities", "Type Checking & Static Analysis"]],
+  ["Model Architectures", ["Decoder-Only Language Models (LLMs)", "Mixture-of-Experts (MoE) Models", "State Space & Hybrid Models", "Encoder-Decoder & Sequence-to-Sequence Models", "Encoder-Only & Embedding Models", "Vision Backbones & Object Detection", "Vision-Language Models", "Audio & Speech Models", "Multimodal Omni & Specialized Models"]],
+  ["Tokenization & Input Processing", ["Tokenizers", "Image, Video & Audio Processors", "Hub Integration & File Caching", "Chat Templates & Response Parsing"]],
+  ["Text Generation", ["GenerationMixin & Decoding Strategies", "KV Cache Implementations", "Logits Processors, Stopping Criteria & Watermarking", "Continuous Batching"]],
+  ["Training", ["Trainer & TrainingArguments", "Callbacks, Optimizers & Schedulers", "Data Collators & Datasets", "Training Examples & Scripts"]],
+  ["Quantization", ["BitsAndBytes, GPTQ & AWQ", "FP8, GGUF/GGML & Other Quantization Backends"]],
+  ["Distributed & Parallel Inference", ["Tensor Parallelism & Expert Parallelism", "DeepSpeed & FSDP Integration", "Accelerate & Device Mapping", "Pipeline Parallelism"]],
+  ["Attention Backends & Kernel Integration", ["Flash Attention, SDPA & FlexAttention", "Hub Kernels & Custom Kernel Loading"]],
+  ["Pipelines", ["Text & Conversational Pipelines", "Vision, Audio & Multimodal Pipelines"]],
+  ["Integrations & Deployment", ["PEFT & Parameter-Efficient Fine-Tuning", "Model Export", "CLI & Serving", "Downstream Ecosystem CI (vLLM, SGLang, TRL)"]],
+  ["Adding New Models", ["Modular Transformers System", "Repository Consistency & Documentation Checks", "AI Agent Tooling & Automated PR Review", "Contribution Workflow & Issue Templates"]],
+  ["CI/CD, Testing & Infrastructure", ["CircleCI Pipeline & Test Selection", "GitHub Actions Workflows", "Docker Images", "Benchmarking Framework", "Test Suite Organization & Common Test Mixins", "Repository Metadata & Git Configuration"]],
+  "Glossary"];
+
+export const playwrightTree = [["Playwright Overview", ["Core Architecture", "Package Structure"]],
+  ["Browser Management", ["Browser Configuration and Protocols", "Browser Installation and Registry", "Browser Patching System", "Browser Engine Implementations"]],
+  ["Core API", ["Browser and Context Management", "Page and Frame Management", "Locator and Element Interactions", "Network Interception", "API Request Context", "Media Capture: Screenshots, Video and Screencast"]],
+  ["Test Framework", ["Test Configuration and Projects", "Fixtures and Lifecycle", ["Test Execution Architecture", ["Module Loading and TypeScript Transform"]], "Assertions and Expectations"]],
+  ["Developer Tools", ["Recorder and Code Generation", "UI Mode", ["Trace Viewer", ["Tracing and Snapshot Capture"]], "Playwright CLI, Daemon and Dashboard", "Shared Web UI Components"]],
+  ["Reporting System", ["HTML Reporter", "Built-in Reporters", "Blob Reporter and Report Merging"]],
+  ["CI/CD and Release Management", ["Test Workflows", "Release and Distribution", "Cross-Language Synchronization"]],
+  ["Advanced Topics", ["Component Testing", "Protocol Communication Architecture", ["MCP Browser Automation Server", ["Chrome Extension and CDP Relay"]], "Electron, Android, and WebView2", "Clock, Storage and Other Emulation Utilities"]],
+  ["Contributing to Playwright", ["Adding APIs and Protocol Changes", "Adding MCP Tools and CLI Commands", "Build System and Tooling", "Test Suite Organization"]],
+  "Glossary"];
+
+export const mineruTree = [["MinerU Overview", ["Getting Started & Installation", "Configuration Reference", "Quality Tiers & Engine Selection"]],
+  ["Core Parsing Architecture", ["Parser Contracts: DocumentParser & ParseResult", "middle_json Schema 2.0", "Rendering & Output Formats", "PDF Analysis Pipeline", "Non-PDF & Flash Format Support", "Post-Processing & LLM-Aided Refinement"]],
+  ["Model Subsystems", ["Layout Detection & Model Runtime", "Table Recognition", "OCR Engine", "Formula Recognition (MFD/MFR)", "VLM Models & Servers"]],
+  ["Document Library (doclib)", ["Doclib Server & Lifecycle", "Parse Service, Cache Semantics & Compaction", "Storage, Search & Telemetry", "Parse Server Health & Managed Backends"]],
+  ["CLI & Service Interfaces", ["mineru CLI (Document Library)", "mineru-kit CLI (Stateless Toolkit)", "V1 REST API Server", "Router & Multi-Worker Deployment", "Gradio WebUI", "Python SDK", "Tasks API & file-parse Server"]],
+  ["Deployment & Hardware", ["Docker Deployment", "Hardware Acceleration"]],
+  ["Development, Testing & Release", ["Test Suite & Benchmarks", "CI/CD & Release Pipeline", "Documentation System & Design Notes"]],
+  ["Ecosystem & Integrations", ["RAG & Plugin Integrations", "Agent Skill & FAQ"]],
+  "Glossary"];

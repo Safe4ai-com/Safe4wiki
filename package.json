@@ -1,0 +1,57 @@
+{
+  "name": "safe4wiki",
+  "version": "1.0.0",
+  "private": false,
+  "license": "Apache-2.0",
+  "author": "Safe4AI (https://safe4ai.com)",
+  "description": "Safe4wiki (SafeSuite) — Local-first, privacy-first AI documentation wiki, hybrid RAG assistant, PDF/offline-HTML exporter, and 1-click subdomain publisher for any repository.",
+  "homepage": "https://github.com/Safe4ai-com/Safe4wiki#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Safe4ai-com/Safe4wiki.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Safe4ai-com/Safe4wiki/issues"
+  },
+  "keywords": [
+    "safesuite",
+    "safe4wiki",
+    "safe4ai",
+    "deepwiki",
+    "documentation",
+    "wiki",
+    "rag",
+    "local-llm",
+    "ollama",
+    "mermaid"
+  ],
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build && node scripts/postbuild.mjs",
+    "start": "node server/index.js --open",
+    "test": "node --test server/test/*_test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.1.0",
+    "@fontsource-variable/geist-mono": "^5.1.0",
+    "dompurify": "^3.1.6",
+    "marked": "^14.1.2",
+    "mermaid": "^11.4.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.27.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.28",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.10"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.48.0"
+  }
+}
