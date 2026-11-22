@@ -196,7 +196,7 @@ export default function WikiPage() {
   const onRefresh = !app.exported
     ? () => (origin === 'local' && app.server
       ? api.post(`${wikiApiPath(owner, repo)}/refresh`, { model: defaultModelName || undefined }).then(reload).catch(e => app.showToast(e.message))
-      : app.openDialog('add', { prefill: { kind: 'git', url: `https://github.com/${owner}/${repo}` } }))
+      : app.openDialog('add', { prefill: { kind: 'git', url: `https://github.com/${owner}/${repo}` }, onStarted: reload }))
     : null;
 
   const ask = (q, files = []) => {

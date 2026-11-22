@@ -14,6 +14,7 @@ const { chatDetailed, ollamaContextSize, applyAgentCliModel, buildDshModelPatch,
 const { exportSite, exportSingleHtml, zipDir, orderPages } = require('../export');
 const { autoMaxPages, resolveMaxPages } = require('../engine/api');
 const { normalizePlan } = require('../engine/plan');
+const { cloneOrUpdate, run: gitRun } = require('../git');
 
 test('settings: keys are hidden from the browser and kept when it saves', () => {
   // Arrange
@@ -334,4 +335,28 @@ test('wiki preprocess: inline backtick fence text does not swallow following mer
   assert.strictEqual(out.diagrams.length, 1);
   assert.ok(out.diagrams[0].includes('A --> B'));
   assert.ok(out.md.includes('data-diagram="0"'));
+});
+
+test('git cloneOrUpdate succeeds on LFS-attributed repos even without git-lfs installed', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'rw-lfs-test-'));
+  const origin = path.join(tmp, 'origin');
+  const dest = path.join(tmp, 'dest');
+  fs.mkdirSync(origin, { recursive: true });
+  await gitRun('git', ['init', '-b', 'main'], { cwd: origin });
+  await gitRun('git', ['config', 'user.email', 'test@example.com'], { cwd: origin });
+  await gitRun('git', ['config', 'user.name', 'Test'], { cwd: origin });
+  fs.writeFileSync(path.join(origin, '.gitattributes'), '*.bin filter=lfs diff=lfs merge=lfs -text\n');
+  fs.writeFileSync(path.join(origin, 'asset.bin'), 'version https://git-lfs.github.com/spec/v1\n');
+  fs.writeFileSync(path.join(origin, 'index.js'), 'console.log("ok");\n');
+  await gitRun('git', ['-c', 'filter.lfs.clean=', '-c', 'filter.lfs.process=', '-c', 'filter.lfs.required=false', 'add', '-A'], { cwd: origin });
+  await gitRun('git', ['-c', 'filter.lfs.clean=', '-c', 'filter.lfs.process=', '-c', 'filter.lfs.required=false', 'commit', '-m', 'init'], { cwd: origin });
+
+  const c1 = await cloneOrUpdate({ url: `file://${origin}`, dir: dest });
+  assert.ok(c1.short.length >= 7);
+  assert.ok(fs.existsSync(path.join(dest, 'index.js')));
+
+  // Second call exercises the fetch + reset --hard path as well
+  const c2 = await cloneOrUpdate({ url: `file://${origin}`, dir: dest });
+  assert.strictEqual(c2.full, c1.full);
+  fs.rmSync(tmp, { recursive: true, force: true });
 });

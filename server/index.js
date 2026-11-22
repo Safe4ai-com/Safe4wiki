@@ -253,7 +253,10 @@ async function api(req, res, url) {
   if (route[0] === 'wikis' && route.length >= 3) {
     const [owner, repo, action] = [route[1], route[2], route[3]];
     const record = store.findWikiRecord(owner, repo);
-    if (!record) return fail(res, 404, 'No local wiki with that name');
+    if (!record) {
+      if (!action && method === 'GET') return send(res, 200, { wiki: null, status: null });
+      return fail(res, 404, 'No local wiki with that name');
+    }
     if (!action && method === 'GET') return send(res, 200, wikiResponse(record));
     if (!action && method === 'DELETE') {
       fs.rmSync(store.wikiDir(record.owner, record.repo), { recursive: true, force: true });

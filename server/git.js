@@ -8,11 +8,18 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+const NO_LFS = [
+  '-c', 'filter.lfs.smudge=',
+  '-c', 'filter.lfs.clean=',
+  '-c', 'filter.lfs.process=',
+  '-c', 'filter.lfs.required=false',
+];
+
 function run(cmd, args, { cwd, env, onLine, secret } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
       cwd,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo', ...(env || {}) },
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo', GIT_LFS_SKIP_SMUDGE: '1', ...(env || {}) },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let out = '';
@@ -59,11 +66,11 @@ async function cloneOrUpdate({ url, branch, token, dir, onLine }) {
   const opts = { onLine, secret: token ? encodeURIComponent(token) : null };
   if (fs.existsSync(path.join(dir, '.git'))) {
     const ref = branch || 'HEAD';
-    await run('git', ['-c', 'credential.helper=', 'fetch', '--depth', '1', remote, ref], { ...opts, cwd: dir });
-    await run('git', ['reset', '--hard', 'FETCH_HEAD'], { cwd: dir });
+    await run('git', ['-c', 'credential.helper=', ...NO_LFS, 'fetch', '--depth', '1', remote, ref], { ...opts, cwd: dir });
+    await run('git', [...NO_LFS, 'reset', '--hard', 'FETCH_HEAD'], { cwd: dir });
   } else {
     fs.mkdirSync(path.dirname(dir), { recursive: true });
-    const args = ['-c', 'credential.helper=', 'clone', '--depth', '1'];
+    const args = ['-c', 'credential.helper=', ...NO_LFS, 'clone', '--depth', '1'];
     if (branch) args.push('--branch', branch);
     args.push(remote, dir);
     await run('git', args, opts);

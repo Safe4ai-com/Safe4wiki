@@ -667,7 +667,7 @@ export function SettingsDialog({ onClose, initialModel = '', initialTab = 'model
 /* Add repo                                                            */
 /* ------------------------------------------------------------------ */
 
-export function AddRepoDialog({ onClose, prefill = {} }) {
+export function AddRepoDialog({ onClose, prefill = {}, onStarted }) {
   const app = useApp();
   const navigate = useNavigate();
   const [kind, setKind] = useState(prefill.kind || 'local');
@@ -705,6 +705,7 @@ export function AddRepoDialog({ onClose, prefill = {} }) {
         maxPages: maxPages ? Number(maxPages) : undefined,
       });
       onClose();
+      if (onStarted) onStarted();
       navigate(`/${r.owner}/${r.repo}`);
     } catch (err) { setError(err.message); } finally { setBusy(false); }
   };
