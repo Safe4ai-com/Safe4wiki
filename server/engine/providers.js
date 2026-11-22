@@ -655,7 +655,7 @@ function chatAgentCli(profile, messages, opts) {
         let hint = '';
         if (command === 'zcode') {
           if (/project_token_login_failed/i.test(tail)) {
-            hint = ` (ZCode Z.AI OAuth token expired — re-run in Terminal: ${loginCmd} — or add Z.AI as an Online API profile with an API key so it never expires)`;
+            hint = ` (ZCode Z.AI login endpoint rejected or rate-limited the OAuth exchange — click Auth in Settings if expired, or for large multi-page wikis use Z.AI as an Online API profile with an API key so it never hits Z.AI's login rate limit)`;
           } else if (/Model creation failed/i.test(tail)) {
             hint = ` (ZCode CLI needs its own isolated sign-in so ZCode Desktop does not clear it. Run once in Terminal: ${loginCmd})`;
           }
@@ -688,8 +688,9 @@ async function chatDetailed(profile, messages, opts = {}) {
       lastErr = err;
       if (opts.signal && opts.signal.aborted) break;
       if (attempt < retries) {
+        const delayMs = /project_token_login_failed/i.test(err.message) ? 5000 * (attempt + 1) : 1500 * (attempt + 1);
         console.warn(`  retry ${attempt + 1}/${retries}: ${err.message.split('\n')[0]}`);
-        await sleep(1500 * (attempt + 1));
+        await sleep(delayMs);
       }
     }
   }

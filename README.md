@@ -67,6 +67,19 @@ We ran a head-to-head comparison on the exact same public repository and commit 
 
 **Requirements:** Node.js `>= 18`
 
+### Option A — 1-Click Local App Launcher (macOS)
+
+[![Open Safe4wiki.command](docs/assets/launch-safe4wiki.svg)](Open%20Safe4wiki.command)
+
+After cloning or downloading the repo, simply double-click **[`Open Safe4wiki.command`](Open%20Safe4wiki.command)** in Finder:
+- Automatically installs dependencies and builds the UI on first launch (if not built yet)
+- Starts the local Safe4wiki server and opens **`http://localhost:4317`** in your browser
+- If Safe4wiki is already running, it opens the browser tab immediately without starting a second server
+
+*(First time on macOS: if Gatekeeper prompts, right-click `Open Safe4wiki.command` → **Open** once.)*
+
+### Option B — Terminal (macOS, Linux, Windows)
+
 ```bash
 git clone https://github.com/Safe4ai-com/Safe4wiki.git
 cd Safe4wiki
@@ -76,8 +89,6 @@ npm start
 ```
 
 Safe4wiki opens automatically at **`http://localhost:4317`**.
-
-> **macOS shortcut:** Double-click `Open Safe4wiki.command` in the repository folder to start the server and open your browser automatically.
 
 ---
 
