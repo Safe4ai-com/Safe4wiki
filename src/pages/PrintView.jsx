@@ -42,12 +42,21 @@ export default function PrintView() {
   }), [pages, ordered, wiki]);
 
   useEffect(() => {
+    const hadDark = document.documentElement.classList.contains('dark');
     document.documentElement.classList.remove('dark');
+    return () => { if (hadDark) document.documentElement.classList.add('dark'); };
+  }, []);
+
+  useEffect(() => {
     if (wiki) document.title = `${wiki.owner}/${wiki.repo} — documentation`;
   }, [wiki]);
 
   useEffect(() => {
-    if (!ref.current || !rendered.length) return;
+    if (!loading && (!wiki || !rendered.length)) {
+      window.__PRINT_READY = true;
+      return undefined;
+    }
+    if (!ref.current || !rendered.length) return undefined;
     let cancelled = false;
     (async () => {
       const sections = Array.from(ref.current.querySelectorAll('[data-print-page]'));
@@ -84,7 +93,7 @@ export default function PrintView() {
               <h1>{wiki.owner}/{wiki.repo}</h1>
               {wiki.description && <p className="desc">{wiki.description}</p>}
               <div className="facts">
-                <div>{ordered.length} pages</div>
+                <div>{ordered.length} {ordered.length === 1 ? 'page' : 'pages'}</div>
                 {(wiki.generatedBy || wiki.model) && <div>Model: {wiki.generatedBy || wiki.model}</div>}
                 {wiki.commit && <div>Source revision {String(wiki.commit).slice(0, 7)}</div>}
                 <div>Indexed {formatDate(wiki.lastIndexed) || '—'} · exported {formatDate(today)}</div>

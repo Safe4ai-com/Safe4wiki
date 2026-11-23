@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { renderPage } from '../lib/wiki.js';
+import { useApp } from '../lib/context';
 
-let mermaidPromise = null;
+let mermaidModulePromise = null;
+let mermaidThemeKey = null;
 let diagramCounter = 0;
 const activeRenders = new WeakMap();
 const diagramSvgCache = new Map();
@@ -34,34 +36,36 @@ function attachDiagramTools(box, code, rendered, onExpand) {
   box.appendChild(bar);
 }
 
-function loadMermaid() {
-  if (!mermaidPromise) {
-    mermaidPromise = import('mermaid').then(mod => {
-      const mermaid = mod.default;
-      const dark = document.documentElement.classList.contains('dark');
-      mermaid.initialize({
-        startOnLoad: false,
-        securityLevel: 'strict',
-        theme: 'base',
-        fontFamily: "'Geist Variable', Geist, ui-sans-serif, system-ui, sans-serif",
-        flowchart: { htmlLabels: true, curve: 'basis', padding: 8, nodeSpacing: 30, rankSpacing: 36 },
-        themeVariables: dark ? {
-          background: '#202020', primaryColor: '#262626', primaryBorderColor: '#4a4a4a', primaryTextColor: '#d4d4d4',
-          lineColor: '#7a7a7a', secondaryColor: '#2a2a2a', tertiaryColor: '#242424', clusterBkg: '#1c1c1c', clusterBorder: '#3a3a3a',
-          noteBkgColor: '#2a2a2a', noteTextColor: '#d4d4d4', fontSize: '16px',
-        } : {
-          background: '#f2f1f0', primaryColor: '#ffffff', primaryBorderColor: '#cfcfcf', primaryTextColor: '#333333',
-          lineColor: '#9a9a9a', secondaryColor: '#fafafa', tertiaryColor: '#ffffff', clusterBkg: '#ebeae9', clusterBorder: '#dcdcdc',
-          noteBkgColor: '#fffbe6', noteTextColor: '#333333', fontSize: '16px', edgeLabelBackground: '#f2f1f0',
-        },
-      });
-      return mermaid;
-    }).catch(err => {
-      mermaidPromise = null;
+async function loadMermaid() {
+  if (!mermaidModulePromise) {
+    mermaidModulePromise = import('mermaid').then(mod => mod.default).catch(err => {
+      mermaidModulePromise = null;
       throw err;
     });
   }
-  return mermaidPromise;
+  const mermaid = await mermaidModulePromise;
+  const dark = document.documentElement.classList.contains('dark');
+  const key = dark ? 'dark' : 'light';
+  if (mermaidThemeKey !== key) {
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      theme: 'base',
+      fontFamily: "'Geist Variable', Geist, ui-sans-serif, system-ui, sans-serif",
+      flowchart: { htmlLabels: true, curve: 'basis', padding: 8, nodeSpacing: 30, rankSpacing: 36 },
+      themeVariables: dark ? {
+        background: '#202020', primaryColor: '#262626', primaryBorderColor: '#4a4a4a', primaryTextColor: '#d4d4d4',
+        lineColor: '#7a7a7a', secondaryColor: '#2a2a2a', tertiaryColor: '#242424', clusterBkg: '#1c1c1c', clusterBorder: '#3a3a3a',
+        noteBkgColor: '#2a2a2a', noteTextColor: '#d4d4d4', fontSize: '16px',
+      } : {
+        background: '#f2f1f0', primaryColor: '#ffffff', primaryBorderColor: '#cfcfcf', primaryTextColor: '#333333',
+        lineColor: '#9a9a9a', secondaryColor: '#fafafa', tertiaryColor: '#ffffff', clusterBkg: '#ebeae9', clusterBorder: '#dcdcdc',
+        noteBkgColor: '#fffbe6', noteTextColor: '#333333', fontSize: '16px', edgeLabelBackground: '#f2f1f0',
+      },
+    });
+    mermaidThemeKey = key;
+  }
+  return mermaid;
 }
 
 /** Auto-quotes unquoted flowchart node labels like `G[png: pdf().toBlob]` that break Mermaid's parser. */
@@ -77,13 +81,15 @@ function sanitizeMermaid(code) {
 }
 
 function renderDiagram(box, code, tools, onExpand) {
-  if (activeRenders.has(box)) return activeRenders.get(box);
-  const cached = diagramSvgCache.get(cacheKey(code));
+  const key = cacheKey(code);
+  const existing = activeRenders.get(box);
+  if (existing && existing.key === key) return existing.promise;
+  const cached = diagramSvgCache.get(key);
   if (cached) {
     box.innerHTML = cached;
     if (tools) attachDiagramTools(box, code, true, onExpand);
     const done = Promise.resolve();
-    activeRenders.set(box, done);
+    activeRenders.set(box, { key, promise: done });
     return done;
   }
   const work = (async () => {
@@ -140,7 +146,7 @@ function renderDiagram(box, code, tools, onExpand) {
     }
     if (tools) attachDiagramTools(box, code, rendered, onExpand);
   })();
-  activeRenders.set(box, work);
+  activeRenders.set(box, { key, promise: work });
   return work;
 }
 
@@ -152,33 +158,45 @@ export async function renderDiagrams(root, diagrams, { tools = true, onExpand } 
 }
 
 export default function Markdown({ markdown, source, resolveLink, onHeadings, onNavigate, onInspectFile, streaming = false, className = 'prose' }) {
+  const app = useApp();
+  const theme = app?.theme || 'light';
   const ref = useRef(null);
   const [zoom, setZoom] = useState(null);
   const rendered = useMemo(() => renderPage(markdown, { source, resolveLink }), [markdown, source, resolveLink]);
 
   useEffect(() => { onHeadings && onHeadings(rendered.headings); }, [rendered, onHeadings]);
 
+  useEffect(() => {
+    if (!zoom) return undefined;
+    const onKey = e => {
+      if (e.key === 'Escape') { e.stopPropagation(); setZoom(null); }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [zoom]);
+
   // Synchronously restore cached SVGs (zero flicker) or calm placeholder while streaming
   useLayoutEffect(() => {
     if (!ref.current) return;
     for (const box of ref.current.querySelectorAll('.diagram[data-diagram]')) {
       const code = rendered.diagrams[Number(box.dataset.diagram)] || '';
-      const cached = diagramSvgCache.get(cacheKey(code));
+      const key = cacheKey(code);
+      const cached = diagramSvgCache.get(key);
       if (cached) {
         box.innerHTML = cached;
         attachDiagramTools(box, code, true, setZoom);
-        activeRenders.set(box, Promise.resolve());
+        activeRenders.set(box, { key, promise: Promise.resolve() });
       } else if (streaming) {
         box.innerHTML = '<div class="diagram-pending"><span class="as-spinner" aria-hidden="true"></span><span>Diagram will render once streaming finishes…</span></div>';
       }
     }
-  }, [rendered, streaming]);
+  }, [rendered, streaming, theme]);
 
   // Only invoke async Mermaid rendering once streaming settles so layout never shakes
   useEffect(() => {
     if (!ref.current || streaming) return;
     renderDiagrams(ref.current, rendered.diagrams, { onExpand: setZoom });
-  }, [rendered, streaming]);
+  }, [rendered, streaming, theme]);
 
   const onClick = e => {
     const chip = e.target.closest('.src-chip[data-file]');

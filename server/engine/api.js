@@ -73,14 +73,12 @@ function normalizeOptions(options = {}) {
   };
 }
 
-// Zero-dependency .env loader. Reads KEY=VALUE lines from <repoDir>/.env then
-// <appDir>/.env into process.env WITHOUT overriding vars already set in the real
-// environment (real env always wins). Keeps secrets out of the committed config:
-// config.json only references env var NAMES ("env:ZHIPU_API_KEY"), the values
-// live in an untracked .env file. Supports optional `export ` prefix, # comments,
-// and single/double quoted values.
-function loadDotenv(repoDir, onEvent = null) {
-  const files = [path.join(repoDir, '.env'), path.join(__dirname, '..', '.env')];
+// Zero-dependency .env loader. Reads KEY=VALUE lines from <appDir>/.env only
+// (never from an untrusted indexed repository's .env, which could inject
+// NODE_OPTIONS or proxy URLs into spawned Agent CLIs) without overriding vars
+// already set in the real environment.
+function loadDotenv(_repoDir, onEvent = null) {
+  const files = [path.join(__dirname, '..', '.env')];
   let loaded = 0;
   for (const file of files) {
     let text;

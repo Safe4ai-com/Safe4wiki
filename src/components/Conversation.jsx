@@ -85,17 +85,19 @@ function Turn({
       pages: origin === 'local' ? undefined : pages.map(p => ({ path: p.path, title: p.title, markdown: p.markdown })),
       attachments: turn.files || [],
     };
+    const controller = new AbortController();
     let answer = '';
     let flushTimer = null;
     const flushAnswer = () => {
       if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-      update({ status: 'streaming', answer });
+      if (!controller.signal.aborted) update({ status: 'streaming', answer });
     };
     const scheduleFlush = () => {
       if (flushTimer) return;
       flushTimer = setTimeout(flushAnswer, 65);
     };
     stream('/api/chat', body, (type, data) => {
+      if (controller.signal.aborted) return;
       if (type === 'status') {
         const text = String(data.message || '').trim();
         update({ statusText: text });
@@ -122,13 +124,19 @@ function Turn({
         if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
         update({ status: 'error', error: data.message, ms: Date.now() - t0 });
       }
-    }).then(() => {
+    }, controller.signal).then(() => {
       if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-      update(t => (t.status === 'done' || t.status === 'error' ? {} : { status: 'done', answer, ms: Date.now() - t0 }));
+      if (!controller.signal.aborted) update(t => (t.status === 'done' || t.status === 'error' ? {} : { status: 'done', answer, ms: Date.now() - t0 }));
     }).catch(err => {
       if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-      update({ status: 'error', error: err.message, ms: Date.now() - t0 });
+      if (!controller.signal.aborted && err?.name !== 'AbortError') {
+        update({ status: 'error', error: err.message, ms: Date.now() - t0 });
+      }
     });
+    return () => {
+      controller.abort();
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    };
   }, [app.server, base, history, origin, pages, turn, update, wiki]);
 
   const wikiRefs = (turn.pageRefs || [])
@@ -360,6 +368,7 @@ export default function Conversation({
   const [split, setSplit] = useState(true);
   const [inspected, setInspected] = useState(null);
   const bodyRef = useRef(null);
+  useEffect(() => { setInspected(null); }, [wiki.owner, wiki.repo]);
   const busy = turns.some(t => t.status === 'thinking' || t.status === 'streaming' || !t.status);
   const lastTurn = turns[turns.length - 1] || null;
   const lastRun = lastTurn ? `${lastTurn.id}-${lastTurn.run || 0}` : '';

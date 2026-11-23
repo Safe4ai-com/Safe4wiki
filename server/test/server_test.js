@@ -11,10 +11,11 @@ const http = require('http');
 const store = require('../store');
 const rag = require('../rag');
 const { chatDetailed, ollamaContextSize, applyAgentCliModel, applyAgentCliEffort, cleanOpencodeOutput, normalizeZcodeReasoningLevel, buildDshModelPatch, insertDshPatchArg } = require('../engine/providers');
-const { exportSite, exportSingleHtml, zipDir, orderPages } = require('../export');
-const { generateWiki, normalizeOptions, autoMaxPages, resolveMaxPages, isQuotaOrAuthError } = require('../engine/api');
+const { exportSite, exportSingleHtml, sanitizeFallbackHtml, zipDir, orderPages } = require('../export');
+const { generateWiki, normalizeOptions, loadDotenv, autoMaxPages, resolveMaxPages, isQuotaOrAuthError } = require('../engine/api');
 const { normalizePlan } = require('../engine/plan');
-const { cloneOrUpdate, run: gitRun } = require('../git');
+const { cloneOrUpdate, cleanUrl, run: gitRun } = require('../git');
+const { publish } = require('../publish');
 const { jobSlotKey, canStartJob, formatGeneratedBy } = require('../jobs');
 
 test('settings: keys are hidden from the browser and kept when it saves', () => {
@@ -570,4 +571,34 @@ test('generateWiki resume skips re-planning and keeps completed pages even after
   assert.ok(fs.existsSync(path.join(outDir, 'runtime.md')));
   const finalState = JSON.parse(fs.readFileSync(path.join(outDir, '.state.json'), 'utf8'));
   assert.strictEqual(finalState.pendingPlan, undefined, 'pendingPlan should clear once all pages succeed');
+});
+
+test('security hardening: XSS fallback sanitizer, untrusted repo .env isolation, cleanUrl, and publish validation', async () => {
+  const dirty = '<p>ok</p><script>alert(1)</script><img src=x onerror="alert(2)"><a href="javascript:alert(3)">x</a>';
+  const clean = sanitizeFallbackHtml(dirty);
+  assert.ok(!/<script/i.test(clean), 'script tag stripped');
+  assert.ok(!/onerror\s*=/i.test(clean), 'event handler stripped');
+  assert.ok(!/javascript:/i.test(clean), 'javascript: URI stripped');
+
+  assert.strictEqual(cleanUrl('HTTPS://user:secret@github.com/org/repo.git'), 'HTTPS://github.com/org/repo.git');
+  assert.strictEqual(cleanUrl('http://user:pass@127.0.0.1/repo.git'), 'http://127.0.0.1/repo.git');
+
+  // Untrusted repo .env must NEVER be loaded into process.env
+  const tmpRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'repowiki-env-'));
+  fs.writeFileSync(path.join(tmpRepo, '.env'), 'SAFE4WIKI_E2E_UNTRUSTED_VAR=injected\n');
+  delete process.env.SAFE4WIKI_E2E_UNTRUSTED_VAR;
+  loadDotenv(tmpRepo);
+  assert.strictEqual(process.env.SAFE4WIKI_E2E_UNTRUSTED_VAR, undefined);
+  fs.rmSync(tmpRepo, { recursive: true, force: true });
+
+  // Publish rejects shell injection in SSH remotePath and flag injection in GitHub repoUrl
+  const dummyWiki = { owner: 'o', repo: 'r', pages: [{ path: 'overview.md', title: 'Overview', markdown: '# Hi' }] };
+  await assert.rejects(
+    publish(dummyWiki, { method: 'ssh', host: 'example.com', remotePath: '/var/www/docs; id' }, () => {}),
+    /shell characters|spaces/i
+  );
+  await assert.rejects(
+    publish(dummyWiki, { method: 'github', repoUrl: '--receive-pack=evil' }, () => {}),
+    /Invalid Git repository URL/i
+  );
 });

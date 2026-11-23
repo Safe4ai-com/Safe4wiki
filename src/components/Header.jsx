@@ -7,7 +7,7 @@ export function useOutside(ref, onOutside, active) {
   useEffect(() => {
     if (!active) return undefined;
     const handler = e => { if (ref.current && !ref.current.contains(e.target)) onOutside(); };
-    const esc = e => { if (e.key === 'Escape') onOutside(); };
+    const esc = e => { if (e.key === 'Escape') { e.stopPropagation(); onOutside(); } };
     document.addEventListener('mousedown', handler);
     document.addEventListener('keydown', esc);
     return () => { document.removeEventListener('mousedown', handler); document.removeEventListener('keydown', esc); };

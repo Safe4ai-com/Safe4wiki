@@ -94,7 +94,7 @@ function wikiResponse(record) {
     wiki: content,
     status: effectiveStatus,
     error: record.error || null,
-    job: job || (effectiveStatus === 'failed' ? { id: null, status: 'failed', error: record.error } : null),
+    job: job || ((effectiveStatus === 'failed' || effectiveStatus === 'paused') ? { id: null, status: effectiveStatus, error: record.error || null } : null),
   };
 }
 
@@ -214,7 +214,9 @@ async function api(req, res, url) {
     const settings = store.loadSettings();
     const saved = settings.models[body.name] || {};
     const profile = { ...saved, ...(body.profile || {}) };
-    if (!profile.apiKey && saved.apiKey) profile.apiKey = saved.apiKey;
+    if (!profile.apiKey && saved.apiKey && (saved.baseUrl || '') === (profile.baseUrl || '')) {
+      profile.apiKey = saved.apiKey;
+    }
     delete profile.hasKey;
     if (route[1] === 'test') {
       const started = Date.now();
@@ -303,9 +305,9 @@ async function api(req, res, url) {
         source = { type: 'local', path: fs.realpathSync(p) };
       } else if (src.type === 'git') {
         const u = String(src.url || '').trim();
-        if (!/^(https:\/\/|http:\/\/|git@|ssh:\/\/)[^\s]+$/.test(u)) return fail(res, 400, 'Enter a Git address (https://… or git@…)');
-        if (src.branch && !/^[A-Za-z0-9._/-]+$/.test(src.branch)) return fail(res, 400, 'Invalid branch name');
-        source = { type: 'git', url: u.replace(/^https:\/\/[^@/]+@/, 'https://'), branch: src.branch || undefined };
+        if (!/^(https:\/\/|http:\/\/|git@|ssh:\/\/)[^\s]+$/i.test(u)) return fail(res, 400, 'Enter a Git address (https://… or git@…)');
+        if (src.branch && !/^(?!-)[A-Za-z0-9._/-]+$/.test(src.branch)) return fail(res, 400, 'Invalid branch name');
+        source = { type: 'git', url: u.replace(/^(https?:\/\/)[^@/]+@/i, '$1'), branch: src.branch || undefined };
         if (src.token) { settings.gitTokens[hostOf(u)] = String(src.token); store.saveSettings(settings); }
       } else return fail(res, 400, 'Choose a folder or a Git repository');
 
@@ -344,6 +346,7 @@ async function api(req, res, url) {
     }
     if (!action && method === 'GET') return send(res, 200, wikiResponse(record));
     if (!action && method === 'DELETE') {
+      jobs.cancelForDelete(record.owner, record.repo);
       fs.rmSync(store.wikiDir(record.owner, record.repo), { recursive: true, force: true });
       if (record.source.type === 'git') fs.rmSync(store.repoCloneDir(record.owner, record.repo), { recursive: true, force: true });
       rag.invalidate(record.owner, record.repo);
@@ -384,9 +387,14 @@ async function api(req, res, url) {
       }
       const rawRel = String(url.searchParams.get('path') || '').replace(/\\/g, '/').replace(/^\/+/, '');
       if (!rawRel || rawRel.includes('\0')) return fail(res, 400, 'Missing file path');
-      const baseName = path.basename(rawRel).toLowerCase();
-      if ((baseName === '.env' || (baseName.startsWith('.env.') && !/example|sample|template/.test(baseName)))
-        || /\.(pem|key|p12|pfx)$/.test(baseName) || /^id_(rsa|ed25519|ecdsa)/.test(baseName)) {
+      const isSensitiveName = name => {
+        const b = String(name || '').toLowerCase();
+        return b === '.env'
+          || (b.startsWith('.env.') && !/^\.env\.(example|sample|template)$/.test(b))
+          || /\.(pem|key|p12|pfx)$/.test(b)
+          || /^id_(rsa|ed25519|ecdsa)/.test(b);
+      };
+      if (isSensitiveName(path.basename(rawRel))) {
         return fail(res, 403, 'Sensitive files cannot be previewed');
       }
       let repoRoot; let realTarget;
@@ -399,6 +407,9 @@ async function api(req, res, url) {
       }
       if (realTarget !== repoRoot && !realTarget.startsWith(`${repoRoot}${path.sep}`)) {
         return fail(res, 403, 'Path outside repository');
+      }
+      if (isSensitiveName(path.basename(realTarget))) {
+        return fail(res, 403, 'Sensitive files cannot be previewed');
       }
       const st = fs.statSync(realTarget);
       if (!st.isFile()) return fail(res, 400, 'Not a file');
@@ -530,7 +541,7 @@ async function api(req, res, url) {
     const settings = store.loadSettings();
     const target = { ...(body.target || {}) };
     const saved = settings.publish || {};
-    if (!target.token && saved.token && target.hasToken) target.token = saved.token;
+    if (!target.token && saved.token && target.hasToken && target.method === saved.method) target.token = saved.token;
     delete target.hasToken;
     settings.publish = { ...target };
     store.saveSettings(settings);
@@ -562,9 +573,10 @@ function pickFolder() {
 /* ---------------- static ---------------- */
 
 function serveStatic(req, res, url) {
-  let rel = decodeURIComponent(url.pathname);
+  let rel;
+  try { rel = decodeURIComponent(url.pathname); } catch { return fail(res, 400, 'Malformed URL'); }
   const file = path.resolve(DIST, `.${rel}`);
-  if (!file.startsWith(DIST)) return fail(res, 403, 'Forbidden');
+  if (file !== DIST && !file.startsWith(`${DIST}${path.sep}`)) return fail(res, 403, 'Forbidden');
   let target = file;
   try {
     const st = fs.statSync(target);
@@ -587,7 +599,8 @@ function serveStatic(req, res, url) {
 }
 
 const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  let url;
+  try { url = new URL(req.url, `http://${req.headers.host || 'localhost'}`); } catch { return fail(res, 400, 'Malformed URL'); }
   if (url.pathname.startsWith('/api/')) {
     if (!allowed(req)) return fail(res, 403, 'Safe4wiki only accepts requests from this computer.');
     try { return await api(req, res, url); } catch (err) {

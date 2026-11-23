@@ -15,21 +15,27 @@ import { findDemo } from '../data/demos/index.js';
 export function useWiki(owner, repo) {
   const app = useApp();
   const [state, setState] = useState({ loading: true });
+  const reqIdRef = useRef(0);
   const reload = useCallback(async () => {
+    const reqId = ++reqIdRef.current;
     if (app.exported) {
       setState({ loading: false, wiki: window.__RW_DATA__ || null, origin: 'export' });
       return;
     }
     if (app.server === null) return;
+    setState(prev => (prev.wiki && prev.wiki.owner === owner && prev.wiki.repo === repo ? prev : { loading: true }));
     if (app.server) {
       try {
         const res = await api.get(wikiApiPath(owner, repo));
-        if (res && res.wiki) { setState({ loading: false, wiki: res.wiki, status: res.status, job: res.job, origin: 'local' }); return; }
-        if (res && res.status) { setState({ loading: false, wiki: null, status: res.status, job: res.job, origin: 'local' }); return; }
+        if (reqId !== reqIdRef.current) return;
+        if (res && res.wiki) { setState({ loading: false, wiki: res.wiki, status: res.status, job: res.job, error: res.error || null, origin: 'local' }); return; }
+        if (res && res.status) { setState({ loading: false, wiki: null, status: res.status, job: res.job, error: res.error || null, origin: 'local' }); return; }
       } catch (err) {
+        if (reqId !== reqIdRef.current) return;
         if (err.status !== 404) { setState({ loading: false, error: err.message }); return; }
       }
     }
+    if (reqId !== reqIdRef.current) return;
     const demo = findDemo(owner, repo);
     setState({ loading: false, wiki: demo, origin: demo ? 'sample' : null });
   }, [app.exported, app.server, owner, repo]);
@@ -185,8 +191,10 @@ export default function WikiPage() {
   }, [chat, chatKey]);
   useEffect(() => {
     if (window.location.hash) {
-      const el = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
-      if (el) setTimeout(() => el.scrollIntoView(), 60);
+      try {
+        const el = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+        if (el) setTimeout(() => el.scrollIntoView(), 60);
+      } catch { /* ignore malformed hash */ }
     }
   }, [current, headings]);
 

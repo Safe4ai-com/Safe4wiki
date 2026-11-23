@@ -266,15 +266,19 @@ async function execute(job) {
       fs.writeFileSync(job.logFile, `=== Safe4wiki ${job.kind} job ${job.id} (${job.owner}/${job.repo}) · ${job.startedAt} ===\n`);
     } catch { /* ignore */ }
   }
-  record.status = 'generating';
-  record.jobId = job.id;
-  record.error = null;
-  store.saveWikiRecord(record);
+  const isEdit = job.kind === 'edit';
+  if (!isEdit) {
+    record.status = 'generating';
+    record.jobId = job.id;
+    record.error = null;
+    store.saveWikiRecord(record);
+  }
   let configFile = null;
   try {
     await prepareSource(job, record, settings);
     if (!record.description) record.description = readDescription(record.repoDir);
-    store.saveWikiRecord(record);
+    if (!isEdit && !job.deleted) store.saveWikiRecord(record);
+    if (job.deleted) throw new Error('Deleted.');
     if (job.paused) { const e = new Error('Paused.'); e.code = 'paused'; throw e; }
     if (job.cancelled) throw new Error('Stopped.');
     const modelLabel = formatGeneratedBy(job.model, settings.models?.[job.model]);
@@ -292,18 +296,27 @@ async function execute(job) {
       op: job.op,
       instruction: job.instruction,
     });
-    record.status = 'ready';
-    record.model = job.model;
-    record.generatedBy = modelLabel;
-    delete record.plannedPages;
-    if (job.kind !== 'edit') record.lastIndexed = new Date().toISOString();
-    store.saveWikiRecord(record);
-    try { require('./rag').prewarm(record); } catch { /* ignore */ }
+    if (job.deleted) return;
+    if (!isEdit) {
+      record.status = 'ready';
+      record.model = job.model;
+      record.generatedBy = modelLabel;
+      delete record.plannedPages;
+      record.lastIndexed = new Date().toISOString();
+      store.saveWikiRecord(record);
+    }
+    try {
+      const rag = require('./rag');
+      rag.invalidate(job.owner, job.repo);
+      rag.prewarm(record);
+    } catch { /* ignore */ }
   } catch (err) {
+    if (job.deleted) throw err;
+    if (isEdit) throw err;
     const isPaused = !!(job.paused || err.code === 'paused');
     const modelLabel = formatGeneratedBy(job.model, settings.models?.[job.model]);
     record.generatedBy = record.generatedBy || modelLabel;
-    const partial = job.kind !== 'edit' ? store.promotePartialStage(record) : { promoted: 0, total: 0, planned: 0 };
+    const partial = store.promotePartialStage(record);
     if (partial.promoted > 0) {
       record.model = job.model;
       record.generatedBy = modelLabel;
@@ -341,10 +354,10 @@ function pump() {
         job.status = isPaused ? 'paused' : 'failed';
         job.error = err.message;
         push(job, { type: isPaused ? 'job_paused' : 'job_error', message: err.message });
+        require('./rag').invalidate(job.owner, job.repo);
       })
       .finally(() => {
         running.delete(job);
-        require('./rag').invalidate(job.owner, job.repo);
         setImmediate(pump);
       });
   }
@@ -413,6 +426,27 @@ function pause(id) {
   return cancel(id, { pause: true });
 }
 
+function cancelForDelete(owner, repo) {
+  const key = `${owner}/${repo}`.toLowerCase();
+  for (let i = queue.length - 1; i >= 0; i--) {
+    if (repoKey(queue[i]) === key) {
+      const target = queue.splice(i, 1)[0];
+      target.deleted = true;
+      target.cancelled = true;
+      target.status = 'failed';
+      target.error = 'Deleted.';
+      push(target, { type: 'job_error', message: 'Deleted.' });
+    }
+  }
+  for (const r of running) {
+    if (repoKey(r) === key) {
+      r.deleted = true;
+      r.cancelled = true;
+      if (r.child) r.child.kill('SIGTERM');
+    }
+  }
+}
+
 /** Wikis left "generating" by a previous server run can't still be running. */
 function recoverInterrupted() {
   for (const r of store.listWikiRecords()) {
@@ -432,4 +466,4 @@ function recoverInterrupted() {
   }
 }
 
-module.exports = { jobs, enqueue, cancel, pause, publicJob, recoverInterrupted, push, findActiveJob, jobSlotKey, canStartJob, formatGeneratedBy };
+module.exports = { jobs, enqueue, cancel, pause, cancelForDelete, publicJob, recoverInterrupted, push, findActiveJob, jobSlotKey, canStartJob, formatGeneratedBy };

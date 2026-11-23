@@ -91,9 +91,9 @@ function exportSite(wikiInput, destDir, { domain } = {}) {
     `window.__RW_EXPORT__=${JSON.stringify({ owner: wiki.owner, repo: wiki.repo })};\nwindow.__RW_DATA__=${json};\n`);
   let shell = fs.readFileSync(path.join(DIST, 'index.html'), 'utf8');
   shell = shell
-    .replace(/<title>[^<]*<\/title>/, `<title>${escapeHtml(`${wiki.owner}/${wiki.repo} documentation`)}</title>`)
-    .replace(/<meta name="description"[^>]*>/, `<meta name="description" content="${escapeHtml(wiki.description || `Documentation for ${wiki.owner}/${wiki.repo}`)}" />`)
-    .replace('<script type="module"', '<script src="/wiki-data.js"></script>\n    <script type="module"');
+    .replace(/<title>[^<]*<\/title>/, () => `<title>${escapeHtml(`${wiki.owner}/${wiki.repo} documentation`)}</title>`)
+    .replace(/<meta name="description"[^>]*>/, () => `<meta name="description" content="${escapeHtml(wiki.description || `Documentation for ${wiki.owner}/${wiki.repo}`)}" />`)
+    .replace('<script type="module"', () => '<script src="/wiki-data.js"></script>\n    <script type="module"');
   const write = rel => {
     const dir = path.join(destDir, rel);
     fs.mkdirSync(dir, { recursive: true });
@@ -312,10 +312,10 @@ function buildSingleHtmlDocument({ wiki, pages }) {
     .toc-links a { color: var(--text-2); line-height: 1.4; display: block; }
     .toc-links a:hover { color: var(--accent); text-decoration: none; }
     .toc-links a.d3 { padding-left: 12px; font-size: 12px; color: var(--muted); }
-    .prose h1 { font-size: 30px; line-height: 1.2; margin: 0 0 18px; letter-spacing: -.02em; }
-    .prose h2 { font-size: 21px; line-height: 1.3; margin: 32px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
-    .prose h3 { font-size: 16.5px; line-height: 1.4; margin: 24px 0 8px; }
-    .prose h4 { font-size: 15px; margin: 18px 0 6px; }
+    .prose h1 { font-size: 30px; line-height: 1.2; margin: 0 0 18px; letter-spacing: -.02em; scroll-margin-top: 72px; }
+    .prose h2 { font-size: 21px; line-height: 1.3; margin: 32px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); scroll-margin-top: 72px; }
+    .prose h3 { font-size: 16.5px; line-height: 1.4; margin: 24px 0 8px; scroll-margin-top: 72px; }
+    .prose h4 { font-size: 15px; margin: 18px 0 6px; scroll-margin-top: 72px; }
     .prose p { margin: 0 0 14px; }
     .prose ul, .prose ol { margin: 0 0 14px; padding-left: 24px; }
     .prose li { margin: 4px 0; }
@@ -443,7 +443,10 @@ function buildSingleHtmlDocument({ wiki, pages }) {
       var searchInput = document.getElementById('searchInput');
       var zoomOverlay = document.getElementById('zoomOverlay');
       var zoomBody = document.getElementById('zoomBody');
-      var pageTexts = pages.map(function (el) { return (el.textContent || '').toLowerCase(); });
+      var pageTexts = pages.map(function (el) {
+        var prose = el.querySelector('.prose');
+        return ((prose ? prose.textContent : el.textContent) || '').toLowerCase();
+      });
       var currentIdx = 0;
 
       function buildToc(article) {
@@ -557,12 +560,21 @@ function buildSingleHtmlDocument({ wiki, pages }) {
 </html>`;
 }
 
+/** Strips executable HTML/script/event-handler vectors from fallback Markdown output. */
+function sanitizeFallbackHtml(html) {
+  return String(html || '')
+    .replace(/<(script|iframe|object|embed|style|link|meta|base|form)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
+    .replace(/<(script|iframe|object|embed|style|link|meta|base|form)\b[^>]*\/?>/gi, '')
+    .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/\b(href|src|xlink:href)\s*=\s*(["'])\s*(?:javascript|vbscript|data:text\/html)[^"']*\2/gi, '$1=$2#$2');
+}
+
 async function renderFallbackPages(wiki) {
   const ordered = orderPages(wiki.pages);
   let markedParse = null;
   try {
     const mod = await import('marked');
-    markedParse = md => mod.marked.parse(String(md || ''), { gfm: true, async: false });
+    markedParse = md => sanitizeFallbackHtml(mod.marked.parse(String(md || ''), { gfm: true, async: false }));
   } catch { /* minimal fallback below */ }
   return ordered.map(p => {
     const id = `page-${slugify(p.slug)}`;
@@ -646,4 +658,4 @@ async function printPdf({ port, owner, repo, paper = 'A4', page }) {
   }
 }
 
-module.exports = { exportSite, exportSingleHtml, buildSingleHtmlDocument, zipDir, printPdf, orderPages, slugify, validateWiki };
+module.exports = { exportSite, exportSingleHtml, sanitizeFallbackHtml, buildSingleHtmlDocument, zipDir, printPdf, orderPages, slugify, validateWiki };

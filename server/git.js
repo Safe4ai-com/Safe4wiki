@@ -51,7 +51,7 @@ function authUrl(url, token) {
 }
 
 function cleanUrl(url) {
-  return String(url).replace(/^https:\/\/[^@/]+@/i, 'https://');
+  return String(url).replace(/^(https?:\/\/)[^@/]+@/i, '$1');
 }
 
 async function headCommit(dir) {
@@ -62,17 +62,20 @@ async function headCommit(dir) {
 }
 
 async function cloneOrUpdate({ url, branch, token, dir, onLine }) {
+  if (branch && !/^(?!-)[A-Za-z0-9._/-]+$/.test(branch)) throw new Error('Invalid branch name');
   const remote = authUrl(url, token);
-  const opts = { onLine, secret: token ? encodeURIComponent(token) : null };
+  const secrets = token ? [token, encodeURIComponent(token)] : [];
+  const scrubLine = line => (onLine ? onLine(secrets.reduce((s, sec) => (sec ? s.split(sec).join('***') : s), line)) : undefined);
+  const opts = { onLine: onLine ? scrubLine : undefined, secret: token ? encodeURIComponent(token) : null };
   if (fs.existsSync(path.join(dir, '.git'))) {
     const ref = branch || 'HEAD';
-    await run('git', ['-c', 'credential.helper=', ...NO_LFS, 'fetch', '--depth', '1', remote, ref], { ...opts, cwd: dir });
+    await run('git', ['-c', 'credential.helper=', ...NO_LFS, 'fetch', '--depth', '1', '--', remote, ref], { ...opts, cwd: dir });
     await run('git', [...NO_LFS, 'reset', '--hard', 'FETCH_HEAD'], { cwd: dir });
   } else {
     fs.mkdirSync(path.dirname(dir), { recursive: true });
     const args = ['-c', 'credential.helper=', ...NO_LFS, 'clone', '--depth', '1'];
     if (branch) args.push('--branch', branch);
-    args.push(remote, dir);
+    args.push('--', remote, dir);
     await run('git', args, opts);
     await run('git', ['remote', 'set-url', 'origin', cleanUrl(url)], { cwd: dir });
   }

@@ -197,7 +197,7 @@ export function renderPage(markdown, { source, resolveLink } = {}) {
     const text = this.parser.parseInline(tokens);
     let target = href || '';
     let external = /^[a-z]+:/i.test(target);
-    if (!external && resolveLink) {
+    if (!external && resolveLink && !target.startsWith('/')) {
       const resolved = resolveLink(target);
       if (resolved) target = resolved;
       else if (source) { target = sourceHref(source, target.split('#')[0]); external = true; }
