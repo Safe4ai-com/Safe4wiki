@@ -305,6 +305,7 @@ html.dark .tok-type { color: #67e8f9; }
 @media (max-width: 960px) {
   .assistant.split .as-left { flex: 1; border-right: 0; }
   .as-right { display: none; }
+  .as-code-toggle { display: none !important; }
 }
 @media (max-width: 639px) {
   .assistant, .assistant.split { width: 100vw; border-left: 0; }

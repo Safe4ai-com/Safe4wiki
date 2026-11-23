@@ -315,7 +315,13 @@ async function api(req, res, url) {
       if (!settings.models[model]) return fail(res, 400, 'Add a model first in Model settings.');
 
       let [owner, repo] = nameFromSource(source);
-      if (body.name && /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(body.name)) [owner, repo] = body.name.split('/');
+      const rawName = String(body.name || '').trim();
+      if (rawName) {
+        if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(rawName)) {
+          return fail(res, 400, 'Name must be in owner/repo format (letters, digits, ., _, -)');
+        }
+        [owner, repo] = rawName.split('/');
+      }
       owner = store.safePart(owner); repo = store.safePart(repo);
       let existing = store.findWikiRecord(owner, repo);
       const sameSource = existing && JSON.stringify({ ...existing.source, branch: undefined }) === JSON.stringify({ ...source, branch: undefined });

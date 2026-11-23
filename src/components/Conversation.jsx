@@ -9,6 +9,7 @@ import { ModeMenu } from './ChatBox.jsx';
 import { useApp } from '../lib/context';
 import { stream } from '../lib/api.js';
 import { searchSections } from '../lib/search.js';
+import { sourceHref } from '../lib/wiki.js';
 
 const MAX_FILES = 5;
 const MAX_FILE_BYTES = 200 * 1024;
@@ -241,16 +242,30 @@ function Turn({
               <span className="as-src-label">Code</span>
               <div className="as-code-chips">
                 {codeRefs.slice(0, 10).map((r, idx) => (
-                  <button
-                    key={`${r.file}-${r.start || idx}`}
-                    type="button"
-                    className={`as-cite-btn${activeFile === r.file ? ' on' : ''}`}
-                    title={`Inspect ${r.file}${r.start ? ` lines ${r.start}-${r.end || r.start}` : ''}`}
-                    onClick={() => onInspectFile(r)}
-                  >
-                    <span>{r.file.split('/').pop()}</span>
-                    {r.start && <span className="as-cite-ln">{r.start}{r.end && r.end !== r.start ? `–${r.end}` : ''}</span>}
-                  </button>
+                  onInspectFile ? (
+                    <button
+                      key={`${r.file}-${r.start || idx}`}
+                      type="button"
+                      className={`as-cite-btn${activeFile === r.file ? ' on' : ''}`}
+                      title={`Inspect ${r.file}${r.start ? ` lines ${r.start}-${r.end || r.start}` : ''}`}
+                      onClick={() => onInspectFile(r)}
+                    >
+                      <span>{r.file.split('/').pop()}</span>
+                      {r.start && <span className="as-cite-ln">{r.start}{r.end && r.end !== r.start ? `–${r.end}` : ''}</span>}
+                    </button>
+                  ) : (
+                    <a
+                      key={`${r.file}-${r.start || idx}`}
+                      className="as-cite-btn"
+                      href={sourceHref(wiki.source, r.file, r.start, r.end)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title={`Open ${r.file}${r.start ? ` lines ${r.start}-${r.end || r.start}` : ''}`}
+                    >
+                      <span>{r.file.split('/').pop()}</span>
+                      {r.start && <span className="as-cite-ln">{r.start}{r.end && r.end !== r.start ? `–${r.end}` : ''}</span>}
+                    </a>
+                  )
                 ))}
               </div>
             </div>
@@ -367,8 +382,17 @@ export default function Conversation({
 }) {
   const [split, setSplit] = useState(true);
   const [inspected, setInspected] = useState(null);
+  const [wideCodeScreen, setWideCodeScreen] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 960));
   const bodyRef = useRef(null);
   useEffect(() => { setInspected(null); }, [wiki.owner, wiki.repo]);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return undefined;
+    const mq = window.matchMedia('(min-width: 961px)');
+    const onChange = () => setWideCodeScreen(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
   const busy = turns.some(t => t.status === 'thinking' || t.status === 'streaming' || !t.status);
   const lastTurn = turns[turns.length - 1] || null;
   const lastRun = lastTurn ? `${lastTurn.id}-${lastTurn.run || 0}` : '';
@@ -495,8 +519,8 @@ export default function Conversation({
                 history={turns.slice(Math.max(0, i - 4), i)}
                 resolveLink={resolveLink}
                 onNavigate={handleNavigate}
-                onInspectFile={handleInspectFile}
-                activeFile={inspected?.file || ''}
+                onInspectFile={wideCodeScreen ? handleInspectFile : null}
+                activeFile={wideCodeScreen ? (inspected?.file || '') : ''}
                 update={patch(turn.id)}
                 retry={retry(turn.id)}
               />

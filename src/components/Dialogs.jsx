@@ -272,6 +272,24 @@ function ModelConfigModal({
   const handleSave = async () => {
     if (isNew && !cleanName) { setError('Enter a profile name.'); return; }
     if (isNew && existingNames.includes(cleanName)) { setError(`A profile named “${cleanName}” already exists.`); return; }
+    if (profile.provider === 'agent-cli' && !String(profile.command || '').trim()) {
+      setError('Enter the CLI command name (e.g. claude, codex, opencode).');
+      return;
+    }
+    if (profile.provider === 'llamacpp' && !String(profile.modelPath || '').trim()) {
+      setError('Enter the path to your .gguf model file.');
+      return;
+    }
+    if (['openai', 'anthropic', 'ollama'].includes(profile.provider)) {
+      if (!String(profile.baseUrl || '').trim()) { setError('Enter the server address (base URL).'); return; }
+      if (!String(profile.model || '').trim()) { setError('Enter a model name.'); return; }
+    }
+    for (const [k, label] of [['contextChars', 'Code context'], ['maxTokens', 'Max answer tokens'], ['contextSize', 'Context window'], ['concurrency', 'Pages in parallel'], ['timeoutMs', 'Timeout']]) {
+      if (profile[k] !== undefined && (!Number.isFinite(Number(profile[k])) || Number(profile[k]) <= 0)) {
+        setError(`${label} must be a positive number.`);
+        return;
+      }
+    }
     setError('');
     setSaving(true);
     try {
@@ -459,7 +477,20 @@ function ModelConfigModal({
             </label>
           </div>
           <label className="field"><span>Address (base URL)</span><input className="input" value={p.baseUrl || ''} onChange={e => set('baseUrl', e.target.value)} /></label>
-          <label className="field"><span>API key</span>
+          <label className="field">
+            <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span>API key</span>
+              {p.hasKey && !p.apiKey && (
+                <button
+                  type="button"
+                  className="inline-link"
+                  style={{ fontSize: 12 }}
+                  onClick={() => setProfile(prev => { const next = { ...prev }; delete next.hasKey; delete next.apiKey; return next; })}
+                >
+                  Clear saved key
+                </button>
+              )}
+            </span>
             <input className="input" type="password" autoComplete="off" value={p.apiKey || ''} onChange={e => set('apiKey', e.target.value)}
               placeholder={p.hasKey ? 'Saved (type to replace)' : 'Not needed for local servers. env:NAME reads an environment variable'} />
           </label>
@@ -936,9 +967,13 @@ function downloadBlob(blob, filename) {
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
 }
 
+function safeDecodeSlug(segment) {
+  try { return decodeURIComponent(segment || ''); } catch { return segment || ''; }
+}
+
 export function PdfDialog({ onClose, wiki }) {
   const app = useApp();
-  const page = decodeURIComponent(window.location.pathname.split('/')[3] || '');
+  const page = safeDecodeSlug(window.location.pathname.split('/')[3]);
   const [scope, setScope] = useState('all');
   const [paper, setPaper] = useState('A4');
   const [busy, setBusy] = useState(false);
@@ -1156,25 +1191,52 @@ export function PublishDialog({ onClose, wiki }) {
 export function EditDialog({ onClose, wiki }) {
   const app = useApp();
   const ordered = useMemo(() => orderPages(wiki.pages || []), [wiki]);
-  const page = decodeURIComponent(window.location.pathname.split('/')[3] || '');
+  const page = safeDecodeSlug(window.location.pathname.split('/')[3]);
   const [path, setPath] = useState((ordered.find(p => p.slug === page) || ordered[0])?.path || '');
   const [op, setOp] = useState('modify');
   const [instruction, setInstruction] = useState('');
   const [log, setLog] = useState([]);
   const [state, setState] = useState('');
+  const abortRef = useRef(null);
+  const reloadTimerRef = useRef(null);
+
+  useEffect(() => () => {
+    if (abortRef.current) abortRef.current.abort();
+    if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+  }, []);
+
+  const handleClose = () => {
+    if (abortRef.current) abortRef.current.abort();
+    if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+    onClose();
+  };
+
   const run = async () => {
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setState('running'); setLog([]);
     try {
       await stream(`${wikiApiPath(wiki.owner, wiki.repo)}/edit`, { path, op, instruction }, (type, data) => {
+        if (controller.signal.aborted) return;
         if (type === 'event') { const line = describeEvent(data); if (line) setLog(l => [...l, line]); }
-        if (type === 'done') { setState('done'); setTimeout(() => window.location.reload(), 600); }
+        if (type === 'done') {
+          setState('done');
+          reloadTimerRef.current = setTimeout(() => {
+            if (!controller.signal.aborted) window.location.reload();
+          }, 600);
+        }
         if (type === 'error') { setState('error'); setLog(l => [...l, `Error: ${data.message}`]); }
-      });
-    } catch (err) { setState('error'); setLog(l => [...l, err.message]); }
+      }, controller.signal);
+    } catch (err) {
+      if (!controller.signal.aborted && err?.name !== 'AbortError') {
+        setState('error'); setLog(l => [...l, err.message]);
+      }
+    }
   };
   return (
-    <Dialog title="Edit Wiki" onClose={onClose} footer={<>
-      <button type="button" className="btn" onClick={onClose}>Cancel</button>
+    <Dialog title="Edit Wiki" onClose={handleClose} footer={<>
+      <button type="button" className="btn" onClick={handleClose}>Cancel</button>
       <button type="button" className="btn btn-blue" onClick={run} disabled={!instruction.trim() || state === 'running'}>{state === 'running' ? 'Working…' : 'Apply'}</button>
     </>}>
       <label className="field"><span>Page</span>
