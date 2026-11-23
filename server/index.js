@@ -213,9 +213,11 @@ async function api(req, res, url) {
     const body = await readBody(req);
     const settings = store.loadSettings();
     const saved = settings.models[body.name] || {};
-    const profile = { ...saved, ...(body.profile || {}) };
-    if (!profile.apiKey && saved.apiKey && (saved.baseUrl || '') === (profile.baseUrl || '')) {
-      profile.apiKey = saved.apiKey;
+    const { apiKey: savedKey, ...savedSafe } = saved;
+    const profile = { ...savedSafe, ...(body.profile || {}) };
+    const allowSavedKey = !body.profile || !!body.profile.hasKey;
+    if (!profile.apiKey && savedKey && allowSavedKey && (saved.baseUrl || '') === (profile.baseUrl || '')) {
+      profile.apiKey = savedKey;
     }
     delete profile.hasKey;
     if (route[1] === 'test') {

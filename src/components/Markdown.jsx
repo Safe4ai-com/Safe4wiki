@@ -5,17 +5,16 @@ import { useApp } from '../lib/context';
 
 let mermaidModulePromise = null;
 let mermaidThemeKey = null;
+let mermaidQueue = Promise.resolve();
 let diagramCounter = 0;
 const activeRenders = new WeakMap();
 const diagramSvgCache = new Map();
 
-function cacheKey(code) {
-  const dark = document.documentElement.classList.contains('dark') ? 'd' : 'l';
-  return `${dark}:${code}`;
+function cacheKey(code, dark = document.documentElement.classList.contains('dark')) {
+  return `${dark ? 'd' : 'l'}:${code}`;
 }
 
-function rememberSvg(code, svg) {
-  const key = cacheKey(code);
+function rememberSvg(key, svg) {
   diagramSvgCache.set(key, svg);
   if (diagramSvgCache.size > 120) {
     const first = diagramSvgCache.keys().next().value;
@@ -36,7 +35,7 @@ function attachDiagramTools(box, code, rendered, onExpand) {
   box.appendChild(bar);
 }
 
-async function loadMermaid() {
+async function loadMermaid(dark) {
   if (!mermaidModulePromise) {
     mermaidModulePromise = import('mermaid').then(mod => mod.default).catch(err => {
       mermaidModulePromise = null;
@@ -44,7 +43,6 @@ async function loadMermaid() {
     });
   }
   const mermaid = await mermaidModulePromise;
-  const dark = document.documentElement.classList.contains('dark');
   const key = dark ? 'dark' : 'light';
   if (mermaidThemeKey !== key) {
     mermaid.initialize({
@@ -68,6 +66,13 @@ async function loadMermaid() {
   return mermaid;
 }
 
+function enqueueMermaidRender(dark, fn) {
+  const run = () => loadMermaid(dark).then(fn);
+  const next = mermaidQueue.then(run, run);
+  mermaidQueue = next.catch(() => {});
+  return next;
+}
+
 /** Auto-quotes unquoted flowchart node labels like `G[png: pdf().toBlob]` that break Mermaid's parser. */
 function sanitizeMermaid(code) {
   const trimmed = String(code || '').trim();
@@ -81,7 +86,8 @@ function sanitizeMermaid(code) {
 }
 
 function renderDiagram(box, code, tools, onExpand) {
-  const key = cacheKey(code);
+  const dark = document.documentElement.classList.contains('dark');
+  const key = cacheKey(code, dark);
   const existing = activeRenders.get(box);
   if (existing && existing.key === key) return existing.promise;
   const cached = diagramSvgCache.get(key);
@@ -94,36 +100,38 @@ function renderDiagram(box, code, tools, onExpand) {
   }
   const work = (async () => {
     const id = `rw-diagram-${++diagramCounter}`;
-    let rendered = false;
+    let svgOut = null;
     let chunkErr = false;
     try {
-      const mermaid = await loadMermaid();
-      try {
-        const { svg } = await mermaid.render(id, code);
-        box.innerHTML = svg;
-        rememberSvg(code, svg);
-        rendered = true;
-      } catch {
-        document.getElementById(`d${id}`)?.remove();
-        const fixed = sanitizeMermaid(code);
-        if (fixed !== code) {
-          const retryId = `rw-diagram-${++diagramCounter}`;
-          try {
-            const { svg } = await mermaid.render(retryId, fixed);
-            box.innerHTML = svg;
-            rememberSvg(code, svg);
-            rendered = true;
-          } catch {
-            document.getElementById(`d${retryId}`)?.remove();
+      svgOut = await enqueueMermaidRender(dark, async mermaid => {
+        try {
+          const { svg } = await mermaid.render(id, code);
+          return svg;
+        } catch {
+          document.getElementById(`d${id}`)?.remove();
+          const fixed = sanitizeMermaid(code);
+          if (fixed !== code) {
+            const retryId = `rw-diagram-${++diagramCounter}`;
+            try {
+              const { svg } = await mermaid.render(retryId, fixed);
+              return svg;
+            } catch {
+              document.getElementById(`d${retryId}`)?.remove();
+            }
           }
+          return null;
         }
-      }
+      });
     } catch (err) {
       if (/dynamically imported module|module script|loading chunk/i.test(String(err?.message || err))) {
         chunkErr = true;
       }
     }
-    if (!rendered) {
+    if (svgOut) rememberSvg(key, svgOut);
+    if (activeRenders.get(box)?.key !== key) return;
+    if (svgOut) {
+      box.innerHTML = svgOut;
+    } else {
       box.innerHTML = '';
       if (chunkErr) {
         const note = document.createElement('div');
@@ -144,7 +152,7 @@ function renderDiagram(box, code, tools, onExpand) {
       pre.textContent = code;
       box.appendChild(pre);
     }
-    if (tools) attachDiagramTools(box, code, rendered, onExpand);
+    if (tools) attachDiagramTools(box, code, Boolean(svgOut), onExpand);
   })();
   activeRenders.set(box, { key, promise: work });
   return work;

@@ -28,8 +28,8 @@ export function useWiki(owner, repo) {
       try {
         const res = await api.get(wikiApiPath(owner, repo));
         if (reqId !== reqIdRef.current) return;
-        if (res && res.wiki) { setState({ loading: false, wiki: res.wiki, status: res.status, job: res.job, error: res.error || null, origin: 'local' }); return; }
-        if (res && res.status) { setState({ loading: false, wiki: null, status: res.status, job: res.job, error: res.error || null, origin: 'local' }); return; }
+        if (res && res.wiki) { setState({ loading: false, wiki: res.wiki, status: res.status, job: res.job, origin: 'local' }); return; }
+        if (res && res.status) { setState({ loading: false, wiki: null, status: res.status, job: res.job, origin: 'local' }); return; }
       } catch (err) {
         if (reqId !== reqIdRef.current) return;
         if (err.status !== 404) { setState({ loading: false, error: err.message }); return; }

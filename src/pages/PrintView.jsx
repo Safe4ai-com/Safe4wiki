@@ -71,7 +71,7 @@ export default function PrintView() {
       if (params.get('auto')) setTimeout(() => window.print(), 300);
     })();
     return () => { cancelled = true; };
-  }, [rendered, params]);
+  }, [loading, wiki, rendered, params]);
 
   if (loading) return <p style={{ padding: 24 }}>Loading…</p>;
   if (!wiki) return <p style={{ padding: 24 }}>No wiki found for {owner}/{repo}. <Link to="/">Back</Link></p>;

@@ -58,7 +58,14 @@ function Turn({
 }) {
   const app = useApp();
   const started = useRef(false);
+  const abortRef = useRef(null);
+  const flushTimerRef = useRef(null);
   const [copied, setCopied] = useState(false);
+
+  useEffect(() => () => {
+    if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
+    if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+  }, []);
 
   useEffect(() => {
     if (started.current || turn.status) return;
@@ -87,15 +94,18 @@ function Turn({
       attachments: turn.files || [],
     };
     const controller = new AbortController();
+    abortRef.current = controller;
     let answer = '';
-    let flushTimer = null;
+    const clearFlush = () => {
+      if (flushTimerRef.current) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+    };
     const flushAnswer = () => {
-      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      clearFlush();
       if (!controller.signal.aborted) update({ status: 'streaming', answer });
     };
     const scheduleFlush = () => {
-      if (flushTimer) return;
-      flushTimer = setTimeout(flushAnswer, 65);
+      if (flushTimerRef.current) return;
+      flushTimerRef.current = setTimeout(flushAnswer, 65);
     };
     stream('/api/chat', body, (type, data) => {
       if (controller.signal.aborted) return;
@@ -114,7 +124,7 @@ function Turn({
         answer += data.text || '';
         scheduleFlush();
       } else if (type === 'done') {
-        if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+        clearFlush();
         update({
           status: 'done',
           resolvedModel: data.model,
@@ -122,22 +132,20 @@ function Turn({
           ms: Date.now() - t0,
         });
       } else if (type === 'error') {
-        if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+        clearFlush();
         update({ status: 'error', error: data.message, ms: Date.now() - t0 });
       }
     }, controller.signal).then(() => {
-      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      clearFlush();
+      if (abortRef.current === controller) abortRef.current = null;
       if (!controller.signal.aborted) update(t => (t.status === 'done' || t.status === 'error' ? {} : { status: 'done', answer, ms: Date.now() - t0 }));
     }).catch(err => {
-      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      clearFlush();
+      if (abortRef.current === controller) abortRef.current = null;
       if (!controller.signal.aborted && err?.name !== 'AbortError') {
         update({ status: 'error', error: err.message, ms: Date.now() - t0 });
       }
     });
-    return () => {
-      controller.abort();
-      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
-    };
   }, [app.server, base, history, origin, pages, turn, update, wiki]);
 
   const wikiRefs = (turn.pageRefs || [])

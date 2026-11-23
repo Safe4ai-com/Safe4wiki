@@ -11,7 +11,7 @@ const http = require('http');
 const store = require('../store');
 const rag = require('../rag');
 const { chatDetailed, ollamaContextSize, applyAgentCliModel, applyAgentCliEffort, cleanOpencodeOutput, normalizeZcodeReasoningLevel, buildDshModelPatch, insertDshPatchArg } = require('../engine/providers');
-const { exportSite, exportSingleHtml, sanitizeFallbackHtml, zipDir, orderPages } = require('../export');
+const { exportSite, exportSingleHtml, renderFallbackMarkdown, zipDir, orderPages } = require('../export');
 const { generateWiki, normalizeOptions, loadDotenv, autoMaxPages, resolveMaxPages, isQuotaOrAuthError } = require('../engine/api');
 const { normalizePlan } = require('../engine/plan');
 const { cloneOrUpdate, cleanUrl, run: gitRun } = require('../git');
@@ -574,11 +574,20 @@ test('generateWiki resume skips re-planning and keeps completed pages even after
 });
 
 test('security hardening: XSS fallback sanitizer, untrusted repo .env isolation, cleanUrl, and publish validation', async () => {
-  const dirty = '<p>ok</p><script>alert(1)</script><img src=x onerror="alert(2)"><a href="javascript:alert(3)">x</a>';
-  const clean = sanitizeFallbackHtml(dirty);
-  assert.ok(!/<script/i.test(clean), 'script tag stripped');
-  assert.ok(!/onerror\s*=/i.test(clean), 'event handler stripped');
-  assert.ok(!/javascript:/i.test(clean), 'javascript: URI stripped');
+  const dirtyMd = [
+    'Hello <script>alert(1)</script> <svg/onload=alert(2)> <img src=x/onerror=alert(3)> [bad](javascript:alert(4))',
+    '',
+    '```jsx',
+    'const once = true;',
+    '<button onClick={save}>Save</button>',
+    '```',
+  ].join('\n');
+  const clean = await renderFallbackMarkdown(dirtyMd);
+  assert.ok(!/<script/i.test(clean), 'script tag escaped');
+  assert.ok(!/<svg/i.test(clean), 'raw svg tag escaped');
+  assert.ok(!/javascript:alert/i.test(clean), 'javascript: URI blocked');
+  assert.ok(clean.includes('const once = true;'), 'fenced code block prose preserved');
+  assert.ok(clean.includes('onClick={save}'), 'fenced JSX event attribute preserved');
 
   assert.strictEqual(cleanUrl('HTTPS://user:secret@github.com/org/repo.git'), 'HTTPS://github.com/org/repo.git');
   assert.strictEqual(cleanUrl('http://user:pass@127.0.0.1/repo.git'), 'http://127.0.0.1/repo.git');

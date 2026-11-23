@@ -560,29 +560,54 @@ function buildSingleHtmlDocument({ wiki, pages }) {
 </html>`;
 }
 
-/** Strips executable HTML/script/event-handler vectors from fallback Markdown output. */
-function sanitizeFallbackHtml(html) {
-  return String(html || '')
-    .replace(/<(script|iframe|object|embed|style|link|meta|base|form)\b[^>]*>[\s\S]*?<\/\1>/gi, '')
-    .replace(/<(script|iframe|object|embed|style|link|meta|base|form)\b[^>]*\/?>/gi, '')
-    .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-    .replace(/\b(href|src|xlink:href)\s*=\s*(["'])\s*(?:javascript|vbscript|data:text\/html)[^"']*\2/gi, '$1=$2#$2');
+function safeFallbackUrl(url) {
+  const s = String(url || '').trim();
+  if (!s) return '#';
+  if (/^(?:#|\/|\.\.?\/|[A-Za-z0-9._-]+(?:\/|$))/.test(s)) return s;
+  if (/^(?:https?:|mailto:)/i.test(s)) return s;
+  return '#';
+}
+
+/**
+ * Fallback Markdown-to-HTML parser used when Chromium/Playwright is unavailable.
+ * Escapes raw HTML tokens and blocks executable URL schemes without touching
+ * fenced code blocks (`const once = true`, JSX `onClick={...}`, etc.).
+ */
+async function renderFallbackMarkdown(md) {
+  const mod = await import('marked');
+  const renderer = new mod.marked.Renderer();
+  renderer.html = token => escapeHtml(typeof token === 'string' ? token : (token.raw || token.text || ''));
+  renderer.link = function link(token) {
+    const href = safeFallbackUrl(token.href);
+    const title = token.title ? ` title="${escapeHtml(token.title)}"` : '';
+    const text = this.parser.parseInline(token.tokens);
+    return `<a href="${escapeHtml(href)}"${title}>${text}</a>`;
+  };
+  renderer.image = token => {
+    const src = safeFallbackUrl(token.href);
+    const alt = escapeHtml(token.text || '');
+    const title = token.title ? ` title="${escapeHtml(token.title)}"` : '';
+    return `<img src="${escapeHtml(src)}" alt="${alt}"${title} />`;
+  };
+  return mod.marked.parse(String(md || ''), { renderer, gfm: true, async: false });
 }
 
 async function renderFallbackPages(wiki) {
   const ordered = orderPages(wiki.pages);
-  let markedParse = null;
+  let useMarked = false;
   try {
-    const mod = await import('marked');
-    markedParse = md => sanitizeFallbackHtml(mod.marked.parse(String(md || ''), { gfm: true, async: false }));
+    await import('marked');
+    useMarked = true;
   } catch { /* minimal fallback below */ }
-  return ordered.map(p => {
+  const out = [];
+  for (const p of ordered) {
     const id = `page-${slugify(p.slug)}`;
-    const html = markedParse
-      ? markedParse(p.markdown)
+    const html = useMarked
+      ? await renderFallbackMarkdown(p.markdown)
       : `<pre>${escapeHtml(p.markdown)}</pre>`;
-    return { id, slug: p.slug, num: p.num, depth: p.depth, title: p.title, html };
-  });
+    out.push({ id, slug: p.slug, num: p.num, depth: p.depth, title: p.title, html });
+  }
+  return out;
 }
 
 async function exportSingleHtml({ port, wiki: wikiInput }) {
@@ -658,4 +683,4 @@ async function printPdf({ port, owner, repo, paper = 'A4', page }) {
   }
 }
 
-module.exports = { exportSite, exportSingleHtml, sanitizeFallbackHtml, buildSingleHtmlDocument, zipDir, printPdf, orderPages, slugify, validateWiki };
+module.exports = { exportSite, exportSingleHtml, renderFallbackMarkdown, buildSingleHtmlDocument, zipDir, printPdf, orderPages, slugify, validateWiki };

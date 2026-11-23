@@ -96,7 +96,7 @@ function formatLogLine(e) {
 }
 
 function appendLog(job, line) {
-  if (!job.logFile || !line) return;
+  if (job.deleted || !job.logFile || !line) return;
   try {
     store.ensureDir(path.dirname(job.logFile));
     fs.appendFileSync(job.logFile, `${line}\n`);
