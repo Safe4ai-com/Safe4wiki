@@ -5,77 +5,48 @@
  * trailing '/' (directory prefix), leading '/' (anchor at repo root).
  * include (when non-empty) is an allowlist; exclude always removes.
  */
-const { buildTreeLines, buildLangStats } = require('./scan');
+const { buildTreeLines, buildLangStats, matchGlobSegments } = require('./scan');
 
-function escapeRx(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
-
-// Glob → regex translation.
-//
+// Linear-time glob matcher (no backtracking RegExp).
 // Chosen semantics (gitignore wins where gitignore and shell globs differ):
 // - '**' matches any number of full path segments (zero or more).
 // - '*' matches any run of characters within a single segment.
 // - A leading '/' anchors the first segment to the repo root.
 // - A trailing '/' matches the directory itself AND everything under it.
 // - A pattern whose body contains no '/' (e.g. 'src/' or '*.md') is unanchored
-//   and may match at any directory depth; a body containing '/' is
-//   root-relative unless it begins with '**' (whose own prefix re-covers any
-//   depth).
+//   and may match at any directory depth.
 function compilePattern(pattern) {
   const anchored = pattern.startsWith('/');
   const directory = pattern.endsWith('/');
   const body = pattern.replace(/^\/+/, '').replace(/\/+$/, '');
-  const segments = body.split('/');
-  const segRx = seg => seg.split('*').map(escapeRx).join('[^/]*');
-
-  // Join segment translations into a path regex. '**' matches any number of
-  // full segments and already consumes its following '/', so only non-'**'
-  // segments emit a '/' before the next segment.
-  let prefix = '';
-  for (let i = 0; i < segments.length; i++) {
-    if (segments[i] === '**') {
-      prefix += '(?:[^/]+/)*';
-    } else {
-      prefix += segRx(segments[i]);
-      if (i < segments.length - 1) prefix += '/';
-    }
-  }
+  const segments = body ? body.split('/') : [];
 
   if (directory) {
-    // 'src/' matches the directory itself and anything below it:
-    // prefix + optional remainder. A trailing '**' already consumes the
-    // slash before the remainder ('src/**/' → 'src/(?:[^/]+/)*'), so its
-    // tail must not add another '/'; a literal final segment still needs it
-    // ('**/test/' → '(?:[^/]+/)*test(?:/.*)?$').
-    const tail = segments.length > 0 && segments[segments.length - 1] === '**'
-      ? '(?:[^/]+(?:/[^/]+)*)?'
-      : '(?:/.*)?';
-    const dirRx = new RegExp('^' + prefix + tail + '$');
+    const dirMatch = (parts) => {
+      if (matchGlobSegments(segments, parts)) return true;
+      for (let len = 1; len < parts.length; len++) {
+        if (matchGlobSegments(segments, parts.slice(0, len))) return true;
+      }
+      return false;
+    };
     return (rel) => {
-      if (dirRx.test(rel)) return true;
+      const parts = rel.split('/');
+      if (dirMatch(parts)) return true;
       if (!anchored && !body.includes('/')) {
-        // gitignore: a pattern with no slash matches at any depth, so an
-        // unanchored bare directory name ('src/') matches any 'src' directory.
-        const parts = rel.split('/');
         for (let i = 1; i < parts.length; i++) {
-          if (dirRx.test(parts.slice(i).join('/'))) return true;
+          if (dirMatch(parts.slice(i))) return true;
         }
       }
       return false;
     };
   }
 
-  // Full (non-directory) pattern. A trailing '**' also matches a partial final
-  // segment: 'src/**' matches both 'src/a.js' and 'src/a/b.js'.
-  let rx = '^' + prefix;
-  if (segments.length && segments[segments.length - 1] === '**') rx += '[^/]*';
-  const full = new RegExp(rx + '$');
   return (rel) => {
-    if (full.test(rel)) return true;
+    const parts = rel.split('/');
+    if (matchGlobSegments(segments, parts)) return true;
     if (!anchored) {
-      // Unanchored patterns may match from any directory boundary.
-      const parts = rel.split('/');
       for (let i = 1; i < parts.length; i++) {
-        if (full.test(parts.slice(i).join('/'))) return true;
+        if (matchGlobSegments(segments, parts.slice(i))) return true;
       }
     }
     return false;

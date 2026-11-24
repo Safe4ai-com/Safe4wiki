@@ -263,10 +263,11 @@ function parseWikiPlanJson(text) {
 }
 
 function loadWikiPlan(repoDir) {
-  const yamlPath = path.join(repoDir, 'wiki_plan.yaml');
-  const jsonPath = path.join(repoDir, 'wiki_plan.json');
-  if (fs.existsSync(yamlPath)) return parseWikiPlanYaml(fs.readFileSync(yamlPath, 'utf8'));
-  if (fs.existsSync(jsonPath)) return parseWikiPlanJson(fs.readFileSync(jsonPath, 'utf8'));
+  const { readConfinedFile } = require('./scan');
+  const yaml = readConfinedFile(repoDir, 'wiki_plan.yaml', 256 * 1024);
+  if (yaml) return parseWikiPlanYaml(yaml.text);
+  const json = readConfinedFile(repoDir, 'wiki_plan.json', 256 * 1024);
+  if (json) return parseWikiPlanJson(json.text);
   return null;
 }
 

@@ -10,9 +10,31 @@
  *  - llamacpp  : GGUF model loaded in-process via node-llama-cpp (no server at all)
  */
 
+const ALLOWED_ENV_KEY_RE = /^(?:OPENAI|ANTHROPIC|OPENROUTER|GROQ|DEEPSEEK|GEMINI|GOOGLE|ZAI|MISTRAL|TOGETHER|FIREWORKS|COHERE|PERPLEXITY|XAI|OLLAMA|LLM|REPOWIKI|SAFE4WIKI)_[A-Z0-9_]*(?:KEY|TOKEN)$/;
+
+const BLOCKED_CHILD_ENV_KEYS = new Set([
+  'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH',
+  'DYLD_FRAMEWORK_PATH', 'NODE_OPTIONS', 'NODE_EXTRA_CA_CERTS', 'BASH_ENV',
+  'ENV', 'ZDOTDIR', 'PATH', 'HOME', 'SHELL',
+]);
+
+function sanitizeProfileEnv(rawEnv) {
+  const out = {};
+  if (!rawEnv || typeof rawEnv !== 'object') return out;
+  for (const [k, v] of Object.entries(rawEnv)) {
+    if (BLOCKED_CHILD_ENV_KEYS.has(String(k).toUpperCase())) continue;
+    if (v !== undefined && v !== null) out[k] = String(v);
+  }
+  return out;
+}
+
 function resolveApiKey(raw) {
   if (!raw) return '';
-  if (raw.startsWith('env:')) return process.env[raw.slice(4)] || '';
+  if (raw.startsWith('env:')) {
+    const varName = raw.slice(4).trim();
+    if (!ALLOWED_ENV_KEY_RE.test(varName)) return '';
+    return process.env[varName] || '';
+  }
   return raw;
 }
 
@@ -526,34 +548,39 @@ function cleanOpencodeOutput(text) {
 
 function chatAgentCli(profile, messages, opts) {
   const { spawn } = require('child_process');
-  const { constants, existsSync, accessSync, readFileSync, writeFileSync, unlinkSync } = require('fs');
+  const { constants, existsSync, accessSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require('fs');
   const { homedir, tmpdir } = require('os');
   const { delimiter, dirname, join } = require('path');
   const { randomBytes } = require('crypto');
   const prompt = messagesToPrompt(messages);
   const command = String(profile.command || '').trim();
   if (!command) throw new Error("provider 'agent-cli' requires a command (e.g. claude, codex, gemini)");
-  const tempFiles = [];
+  let privateTmpDir = null;
+  const ensurePrivateTmpDir = () => {
+    if (!privateTmpDir) privateTmpDir = mkdtempSync(join(tmpdir(), 'safe4wiki-cli-'));
+    return privateTmpDir;
+  };
   const cleanupTemp = () => {
-    while (tempFiles.length) {
-      const f = tempFiles.pop();
-      try { unlinkSync(f); } catch { /* ignore */ }
+    if (privateTmpDir) {
+      try { rmSync(privateTmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+      privateTmpDir = null;
     }
   };
-  let rawArgs = applyAgentCliModel(command, Array.isArray(profile.args) ? profile.args.map(String) : [], profile.model);
-  rawArgs = applyAgentCliEffort(command, rawArgs, profile.reasoningEffort);
-  if (command === 'dsh' && (profile.model || profile.reasoningEffort) && !rawArgs.includes('--patch')) {
-    const patchYaml = buildDshModelPatch(profile.model, profile.reasoningEffort);
+  const safeModel = profile.model && !String(profile.model).trim().startsWith('-') ? String(profile.model).trim() : '';
+  const safeEffort = profile.reasoningEffort && /^[A-Za-z0-9._-]+$/.test(String(profile.reasoningEffort).trim()) ? String(profile.reasoningEffort).trim() : '';
+  let rawArgs = applyAgentCliModel(command, Array.isArray(profile.args) ? profile.args.map(String) : [], safeModel);
+  rawArgs = applyAgentCliEffort(command, rawArgs, safeEffort);
+  if (command === 'dsh' && (safeModel || safeEffort) && !rawArgs.includes('--patch')) {
+    const patchYaml = buildDshModelPatch(safeModel, safeEffort);
     if (patchYaml) {
-      const patchPath = join(tmpdir(), `safe4wiki-dsh-${randomBytes(6).toString('hex')}.yml`);
-      writeFileSync(patchPath, patchYaml, { mode: 0o600 });
-      tempFiles.push(patchPath);
+      const patchPath = join(ensurePrivateTmpDir(), `dsh-${randomBytes(6).toString('hex')}.yml`);
+      writeFileSync(patchPath, patchYaml, { mode: 0o600, flag: 'wx' });
       rawArgs = insertDshPatchArg(rawArgs, patchPath);
     }
   }
   const usesArg = rawArgs.some(a => a.includes('{prompt}'));
   const args = rawArgs.map(a => a.split('{prompt}').join(prompt));
-  const env = { ...process.env, ...(profile.env || {}) };
+  const env = { ...process.env, ...sanitizeProfileEnv(profile.env) };
   let executable = command;
   if ((command === 'dsh' || command === 'opencode') && process.platform !== 'win32') {
     const node = resolveAgentNode(env);
@@ -601,9 +628,8 @@ function chatAgentCli(profile, messages, opts) {
           if (rl) nextSel.options = { ...(existingSel.options || {}), reasoningLevel: rl };
           else if (existingSel.options) nextSel.options = existingSel.options;
           parsed.config.defaultModelSelection = nextSel;
-          const overlayPath = join(tmpdir(), `safe4wiki-zcode-${randomBytes(6).toString('hex')}.json`);
-          writeFileSync(overlayPath, JSON.stringify(parsed), { mode: 0o600 });
-          tempFiles.push(overlayPath);
+          const overlayPath = join(ensurePrivateTmpDir(), `zcode-${randomBytes(6).toString('hex')}.json`);
+          writeFileSync(overlayPath, JSON.stringify(parsed), { mode: 0o600, flag: 'wx' });
           env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = overlayPath;
         }
       } catch { /* ignore invalid personal config */ }

@@ -241,4 +241,5 @@ function createRunTransaction(targets, runIdValue) {
 
 module.exports = {
   createRunTransaction,
+  assertNoSymlinkPath,
 };

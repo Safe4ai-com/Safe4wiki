@@ -241,14 +241,19 @@ async function prepareSource(job, record, settings) {
 }
 
 function readDescription(repoDir) {
+  const { readConfinedFile } = require('./engine/scan');
   try {
-    const pkg = JSON.parse(fs.readFileSync(path.join(repoDir, 'package.json'), 'utf8'));
-    if (pkg.description) return String(pkg.description).slice(0, 240);
+    const r = readConfinedFile(repoDir, 'package.json', 256 * 1024);
+    if (r) {
+      const pkg = JSON.parse(r.text);
+      if (pkg.description) return String(pkg.description).slice(0, 240);
+    }
   } catch { /* ignore */ }
   for (const name of ['README.md', 'readme.md', 'README']) {
     try {
-      const text = fs.readFileSync(path.join(repoDir, name), 'utf8');
-      const para = text.split(/\n\s*\n/).map(s => s.trim()).find(s => s && !s.startsWith('#') && !s.startsWith('<') && !s.startsWith('[!') && !s.startsWith('!['));
+      const r = readConfinedFile(repoDir, name, 256 * 1024);
+      if (!r) continue;
+      const para = r.text.split(/\n\s*\n/).map(s => s.trim()).find(s => s && !s.startsWith('#') && !s.startsWith('<') && !s.startsWith('[!') && !s.startsWith('!['));
       if (para) return para.replace(/\s+/g, ' ').replace(/[*_`]/g, '').slice(0, 240);
     } catch { /* ignore */ }
   }
@@ -450,6 +455,14 @@ function cancelForDelete(owner, repo) {
 /** Wikis left "generating" by a previous server run can't still be running. */
 function recoverInterrupted() {
   for (const r of store.listWikiRecords()) {
+    try {
+      const wDir = store.wikiDir(r.owner, r.repo);
+      for (const f of fs.readdirSync(wDir)) {
+        if (/^\.run-config-\d+\.json$/.test(f)) {
+          try { fs.unlinkSync(path.join(wDir, f)); } catch { /* ignore */ }
+        }
+      }
+    } catch { /* ignore */ }
     const partial = store.promotePartialStage(r);
     if (r.status === 'generating' || r.status === 'queued') {
       if (partial.planned > 0) r.plannedPages = partial.planned;

@@ -7,6 +7,7 @@
  *   repos/<owner__repo>/   clones of Git repositories
  *   exports/               HTML exports
  */
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -40,25 +41,28 @@ const DEFAULT_SETTINGS = {
   models: {
     'inkling-2-mini': { provider: 'ollama', baseUrl: 'http://localhost:11434', model: 'inkling-2-mini:latest', think: false, contextChars: 48000, contextSize: 24576, maxTokens: 16384 },
     ollama: { provider: 'ollama', baseUrl: 'http://localhost:11434', model: 'qwen3.5:9b', contextChars: 48000, maxTokens: 8192 },
-    'claude-code': { provider: 'agent-cli', command: 'claude', args: ['-p', '--output-format', 'text'], contextChars: 60000, timeoutMs: 900000 },
+    'claude-code': { provider: 'agent-cli', command: 'claude', args: ['-p', '--output-format', 'text', '--permission-mode', 'plan'], contextChars: 60000, timeoutMs: 900000 },
   },
   embedding: { enabled: false, baseUrl: 'http://localhost:11434/v1', model: 'nomic-embed-text', apiKey: '' },
   publish: { method: 'ssh' },
   gitTokens: {},
 };
 
-function ensureDir(dir) { fs.mkdirSync(dir, { recursive: true }); return dir; }
+function ensureDir(dir) {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  return dir;
+}
 
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
 }
 
-function writeJson(file, data, mode) {
+function writeJson(file, data, mode = 0o600) {
   ensureDir(path.dirname(file));
-  const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), mode ? { mode } : undefined);
+  const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { mode, flag: 'wx' });
   fs.renameSync(tmp, file);
-  if (mode) { try { fs.chmodSync(file, mode); } catch { /* ignore */ } }
+  try { fs.chmodSync(file, mode); } catch { /* ignore */ }
 }
 
 function loadSettings() {
@@ -108,23 +112,38 @@ function publicSettings(s) {
   };
 }
 
-/** Applies settings from the browser, keeping saved secrets that came back empty. */
+function samePublishDestination(prev = {}, next = {}) {
+  if (!prev.method || prev.method !== next.method) return false;
+  if (prev.method === 'github') return String(prev.repoUrl || '').trim() === String(next.repoUrl || '').trim();
+  if (prev.method === 'cloudflare') {
+    return String(prev.accountId || '').trim() === String(next.accountId || '').trim()
+      && String(prev.project || '').trim() === String(next.project || '').trim();
+  }
+  if (prev.method === 'netlify') return String(prev.siteId || '').trim() === String(next.siteId || '').trim();
+  return false;
+}
+
+/** Applies settings from the browser, keeping saved secrets only when their bound destination is unchanged. */
 function mergeSettings(current, incoming) {
-  const keep = (prev = {}, next = {}) => {
+  const keep = (prev = {}, next = {}, canKeepSecret = () => false) => {
     const out = { ...next };
     delete out.hasKey; delete out.hasToken;
     for (const k of SECRET_KEYS) {
-      if ((out[k] === '' || out[k] === undefined) && prev[k] && next[`has${k === 'apiKey' ? 'Key' : 'Token'}`]) out[k] = prev[k];
+      if ((out[k] === '' || out[k] === undefined) && prev[k] && next[`has${k === 'apiKey' ? 'Key' : 'Token'}`] && canKeepSecret(prev, out, k)) {
+        out[k] = prev[k];
+      }
       if (out[k] === '') delete out[k];
     }
     return out;
   };
+  const sameModelDest = (prev, next) => prev.provider === next.provider && String(prev.baseUrl || '') === String(next.baseUrl || '');
+  const sameEmbedDest = (prev, next) => String(prev.baseUrl || '') === String(next.baseUrl || '');
   const models = {};
   for (const [name, p] of Object.entries(incoming.models || {})) {
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(name)) throw new Error(`Invalid profile name: ${name}`);
     const provider = p.provider;
     if (!['openai', 'anthropic', 'ollama', 'llamacpp', 'agent-cli'].includes(provider)) throw new Error(`Unknown provider for ${name}`);
-    models[name] = keep(current.models[name], p);
+    models[name] = keep(current.models[name], p, sameModelDest);
   }
   const next = {
     ...current,
@@ -136,9 +155,9 @@ function mergeSettings(current, incoming) {
     language: /^[A-Za-z0-9-]{2,10}$/.test(incoming.language || '') ? incoming.language : 'en',
     template: incoming.template === 'minimal' ? 'minimal' : 'standard',
     models,
-    embedding: keep(current.embedding, incoming.embedding || current.embedding),
+    embedding: keep(current.embedding, incoming.embedding || current.embedding, sameEmbedDest),
   };
-  if (incoming.publish) next.publish = keep(current.publish, incoming.publish);
+  if (incoming.publish) next.publish = keep(current.publish, incoming.publish, samePublishDestination);
   return next;
 }
 
@@ -338,6 +357,7 @@ module.exports = {
   saveSettings,
   publicSettings,
   mergeSettings,
+  samePublishDestination,
   safePart,
   wikiKey,
   wikiDir,

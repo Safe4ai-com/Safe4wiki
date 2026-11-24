@@ -157,17 +157,29 @@ function wikiChunks(pages) {
 }
 
 function walkFiles(root) {
+  const { isSensitiveName, gitignoreMatchers, parseGitignoreFile } = require('./engine/scan');
+  const rootIgnored = gitignoreMatchers(root);
   const files = [];
-  const stack = [''];
+  const stack = [{ rel: '', ignored: rootIgnored }];
   while (stack.length && files.length < MAX_FILES) {
-    const rel = stack.pop();
+    const { rel, ignored } = stack.pop();
     let entries = [];
     try { entries = fs.readdirSync(path.join(root, rel), { withFileTypes: true }); } catch { continue; }
+    let localIgnored = ignored;
+    if (rel && entries.some(e => e.isFile() && e.name === '.gitignore')) {
+      const nested = parseGitignoreFile(root, `${rel}/.gitignore`, rel);
+      if (nested.length) localIgnored = [...ignored, ...nested];
+    }
     for (const e of entries) {
       if (e.name.startsWith('.') && e.name !== '.github') continue;
       const r = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) { if (!SKIP_DIRS.has(e.name)) stack.push(r); continue; }
+      if (e.isDirectory()) {
+        if (SKIP_DIRS.has(e.name) || localIgnored.some(m => m(r))) continue;
+        stack.push({ rel: r, ignored: localIgnored });
+        continue;
+      }
       if (!e.isFile()) continue;
+      if (isSensitiveName(e.name) || localIgnored.some(m => m(r))) continue;
       const ext = e.name.includes('.') ? e.name.split('.').pop().toLowerCase() : e.name.toLowerCase();
       if (!TEXT_EXT.has(ext) || /\.(min|bundle)\.(js|css)$|lock\.json$|\.lock$/.test(e.name)) continue;
       files.push(r);
@@ -400,8 +412,8 @@ function buildMessages({ owner, repo, question, history, contexts, agent, overvi
   ].filter(Boolean).join('\n');
   const msgs = [{ role: 'system', content: system }];
   for (const h of history || []) {
-    if (h.q) msgs.push({ role: 'user', content: h.q });
-    if (h.a) msgs.push({ role: 'assistant', content: String(h.a).slice(0, 4000) });
+    if (h && h.q) msgs.push({ role: 'user', content: String(h.q).slice(0, 4000) });
+    if (h && h.a) msgs.push({ role: 'assistant', content: String(h.a).slice(0, 4000) });
   }
   msgs.push({
     role: 'user',

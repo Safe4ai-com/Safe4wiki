@@ -40,12 +40,29 @@ function orderPages(pages) {
   return out;
 }
 
+function assertNotSymlink(targetPath) {
+  try {
+    if (fs.lstatSync(targetPath).isSymbolicLink()) {
+      throw new Error(`Refusing to write through symbolic link: ${targetPath}`);
+    }
+  } catch (err) {
+    if (err && err.code !== 'ENOENT') throw err;
+  }
+}
+
+function safeWriteFile(targetPath, data, enc) {
+  assertNotSymlink(targetPath);
+  fs.writeFileSync(targetPath, data, enc);
+}
+
 function copyDir(src, dest, skipTop) {
+  assertNotSymlink(dest);
   fs.mkdirSync(dest, { recursive: true });
   for (const e of fs.readdirSync(src, { withFileTypes: true })) {
     if (skipTop && skipTop.has(e.name)) continue;
     const s = path.join(src, e.name);
     const d = path.join(dest, e.name);
+    assertNotSymlink(d);
     if (e.isDirectory()) copyDir(s, d);
     else if (e.isFile()) fs.copyFileSync(s, d);
   }
@@ -83,11 +100,12 @@ function resolveWiki(wiki) {
 
 function exportSite(wikiInput, destDir, { domain } = {}) {
   if (!fs.existsSync(path.join(DIST, 'index.html'))) throw new Error('The app is not built yet: run “npm run build” first.');
+  assertNotSymlink(destDir);
   const wiki = resolveWiki(wikiInput);
   copyDir(DIST, destDir, new Set([...DEMO_ROUTES, '404.html', 'index.html']));
   const data = { ...wiki, id: `${wiki.owner}/${wiki.repo}`, exported: true };
   const json = JSON.stringify(data).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
-  fs.writeFileSync(path.join(destDir, 'wiki-data.js'),
+  safeWriteFile(path.join(destDir, 'wiki-data.js'),
     `window.__RW_EXPORT__=${JSON.stringify({ owner: wiki.owner, repo: wiki.repo })};\nwindow.__RW_DATA__=${json};\n`);
   let shell = fs.readFileSync(path.join(DIST, 'index.html'), 'utf8');
   shell = shell
@@ -96,16 +114,17 @@ function exportSite(wikiInput, destDir, { domain } = {}) {
     .replace('<script type="module"', () => '<script src="/wiki-data.js"></script>\n    <script type="module"');
   const write = rel => {
     const dir = path.join(destDir, rel);
+    assertNotSymlink(dir);
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'index.html'), shell);
+    safeWriteFile(path.join(dir, 'index.html'), shell);
   };
   write('');
   write(`${wiki.owner}/${wiki.repo}`);
   write(`${wiki.owner}/${wiki.repo}/print`);
   for (const p of orderPages(wiki.pages)) write(`${wiki.owner}/${wiki.repo}/${p.slug}`);
-  fs.writeFileSync(path.join(destDir, '404.html'), shell);
-  if (domain && /^[A-Za-z0-9.-]+$/.test(domain)) fs.writeFileSync(path.join(destDir, 'CNAME'), `${domain}\n`);
-  fs.writeFileSync(path.join(destDir, '.nojekyll'), '');
+  safeWriteFile(path.join(destDir, '404.html'), shell);
+  if (domain && /^[A-Za-z0-9.-]+$/.test(domain)) safeWriteFile(path.join(destDir, 'CNAME'), `${domain}\n`);
+  safeWriteFile(path.join(destDir, '.nojekyll'), '');
   return { dir: destDir, pages: wiki.pages.length, wiki };
 }
 
@@ -223,6 +242,7 @@ function buildSingleHtmlDocument({ wiki, pages }) {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data: blob:; font-src data:;" />
   <title>${escapeHtml(title)}</title>
   <meta name="description" content="${escapeHtml(desc)}" />
   ${monogramGold ? `<link rel="icon" href="${monogramGold}" type="image/svg+xml" />` : ''}
@@ -510,7 +530,9 @@ function buildSingleHtmlDocument({ wiki, pages }) {
         if (diag) {
           var svg = diag.querySelector(':scope > svg');
           if (svg) {
-            zoomBody.innerHTML = svg.outerHTML.replace(/max-width:[^;"]*;?/g, '');
+            var clone = svg.cloneNode(true);
+            clone.style.maxWidth = '';
+            zoomBody.replaceChildren(clone);
             zoomOverlay.classList.add('open');
           }
         }
@@ -562,7 +584,7 @@ function buildSingleHtmlDocument({ wiki, pages }) {
 
 function safeFallbackUrl(url) {
   const s = String(url || '').trim();
-  if (!s) return '#';
+  if (!s || s.startsWith('//')) return '#';
   if (/^(?:#|\/|\.\.?\/|[A-Za-z0-9._-]+(?:\/|$))/.test(s)) return s;
   if (/^(?:https?:|mailto:)/i.test(s)) return s;
   return '#';
@@ -570,13 +592,18 @@ function safeFallbackUrl(url) {
 
 /**
  * Fallback Markdown-to-HTML parser used when Chromium/Playwright is unavailable.
- * Escapes raw HTML tokens and blocks executable URL schemes without touching
- * fenced code blocks (`const once = true`, JSX `onClick={...}`, etc.).
+ * Escapes raw HTML tokens (including text emitted inside marked's inRawBlock state)
+ * and blocks executable URL schemes without touching fenced code blocks.
  */
 async function renderFallbackMarkdown(md) {
   const mod = await import('marked');
   const renderer = new mod.marked.Renderer();
   renderer.html = token => escapeHtml(typeof token === 'string' ? token : (token.raw || token.text || ''));
+  renderer.text = function text(token) {
+    if (token && token.tokens) return this.parser.parseInline(token.tokens);
+    const raw = typeof token === 'string' ? token : (token.text || '');
+    return raw.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  };
   renderer.link = function link(token) {
     const href = safeFallbackUrl(token.href);
     const title = token.title ? ` title="${escapeHtml(token.title)}"` : '';
@@ -610,7 +637,7 @@ async function renderFallbackPages(wiki) {
   return out;
 }
 
-async function exportSingleHtml({ port, wiki: wikiInput }) {
+async function exportSingleHtml({ port, wiki: wikiInput, sessionToken }) {
   const wiki = resolveWiki(wikiInput);
   let pages = null;
   if (port) {
@@ -620,7 +647,18 @@ async function exportSingleHtml({ port, wiki: wikiInput }) {
       let browser;
       try {
         try { browser = await playwright.chromium.launch(); } catch { browser = await playwright.chromium.launch({ channel: 'chrome' }); }
-        const ctx = await browser.newContext({ viewport: { width: 1200, height: 1000 } });
+        const ctx = await browser.newContext({
+          viewport: { width: 1200, height: 1000 },
+          extraHTTPHeaders: sessionToken ? { 'x-safe4wiki-token': sessionToken } : {},
+        });
+        const allowPrefix = `http://127.0.0.1:${port}/`;
+        await ctx.route('**/*', route => {
+          const reqUrl = route.request().url();
+          if (reqUrl.startsWith(allowPrefix) || reqUrl.startsWith('data:') || reqUrl.startsWith('blob:')) {
+            return route.continue();
+          }
+          return route.abort();
+        });
         const tab = await ctx.newPage();
         await tab.goto(`http://127.0.0.1:${port}/${encodeURIComponent(wiki.owner)}/${encodeURIComponent(wiki.repo)}/print?paper=A4`, { waitUntil: 'networkidle', timeout: 120000 });
         await tab.waitForFunction(() => window.__PRINT_READY === true, null, { timeout: 180000 });
@@ -645,7 +683,7 @@ async function exportSingleHtml({ port, wiki: wikiInput }) {
 
 /* ---------------- pdf ---------------- */
 
-async function printPdf({ port, owner, repo, paper = 'A4', page }) {
+async function printPdf({ port, owner, repo, paper = 'A4', page, sessionToken }) {
   let playwright;
   try { playwright = require('playwright'); } catch {
     const e = new Error('Built-in PDF printing needs Playwright (npm install playwright && npx playwright install chromium). Opening your browser’s print window instead.');
@@ -661,7 +699,18 @@ async function printPdf({ port, owner, repo, paper = 'A4', page }) {
     throw e;
   }
   try {
-    const ctx = await browser.newContext({ viewport: { width: 1100, height: 1400 } });
+    const ctx = await browser.newContext({
+      viewport: { width: 1100, height: 1400 },
+      extraHTTPHeaders: sessionToken ? { 'x-safe4wiki-token': sessionToken } : {},
+    });
+    const allowPrefix = `http://127.0.0.1:${port}/`;
+    await ctx.route('**/*', route => {
+      const reqUrl = route.request().url();
+      if (reqUrl.startsWith(allowPrefix) || reqUrl.startsWith('data:') || reqUrl.startsWith('blob:')) {
+        return route.continue();
+      }
+      return route.abort();
+    });
     const tab = await ctx.newPage();
     const q = new URLSearchParams({ paper, ...(page ? { page } : {}) });
     await tab.goto(`http://127.0.0.1:${port}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/print?${q}`, { waitUntil: 'networkidle', timeout: 120000 });

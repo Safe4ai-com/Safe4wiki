@@ -7,6 +7,7 @@
  *   npm run build   (once)
  *   npm start       -> http://localhost:4317
  */
+const crypto = require('crypto');
 const http = require('http');
 const fs = require('fs');
 const os = require('os');
@@ -18,10 +19,57 @@ const rag = require('./rag');
 const { exportSite, exportSingleHtml, zipDir, printPdf } = require('./export');
 const { publish } = require('./publish');
 const { chatDetailed, resolveApiKey, resolveAgentNode } = require('./engine/providers');
+const { isSensitiveName } = require('./engine/scan');
 const { hostOf } = require('./git');
 
 const PORT = Number(process.env.PORT || 4317);
 const DIST = path.join(__dirname, '..', 'dist');
+const ALLOWED_TEST_CLIS = new Set(['claude', 'codex', 'gemini', 'opencode', 'dsh', 'zcode']);
+
+function loadOrCreateSessionToken() {
+  store.ensureDir(store.HOME);
+  try { fs.chmodSync(store.HOME, 0o700); } catch { /* ignore */ }
+  const tokenFile = path.join(store.HOME, '.session-token');
+  try {
+    const lst = fs.lstatSync(tokenFile);
+    if (!lst.isSymbolicLink() && lst.isFile()) {
+      const existing = fs.readFileSync(tokenFile, 'utf8').trim();
+      if (/^[a-f0-9]{64}$/.test(existing)) return existing;
+    }
+  } catch { /* generate fresh token */ }
+  const token = crypto.randomBytes(32).toString('hex');
+  try { fs.unlinkSync(tokenFile); } catch { /* ignore */ }
+  fs.writeFileSync(tokenFile, token + '\n', { mode: 0o600, flag: 'wx' });
+  try { fs.chmodSync(tokenFile, 0o600); } catch { /* ignore */ }
+  return token;
+}
+
+const SESSION_TOKEN = loadOrCreateSessionToken();
+const SESSION_COOKIE = 's4w_session';
+
+function parseCookies(header) {
+  const out = {};
+  for (const part of String(header || '').split(';')) {
+    const idx = part.indexOf('=');
+    if (idx <= 0) continue;
+    out[part.slice(0, idx).trim()] = part.slice(idx + 1).trim();
+  }
+  return out;
+}
+
+function validSessionToken(candidate) {
+  if (typeof candidate !== 'string' || candidate.length !== SESSION_TOKEN.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(candidate, 'utf8'), Buffer.from(SESSION_TOKEN, 'utf8'));
+  } catch { return false; }
+}
+
+function hasValidSession(req) {
+  const hdr = req.headers['x-safe4wiki-token'];
+  if (typeof hdr === 'string' && validSessionToken(hdr.trim())) return true;
+  const cookies = parseCookies(req.headers.cookie);
+  return validSessionToken(cookies[SESSION_COOKIE]);
+}
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.woff2': 'font/woff2', '.woff': 'font/woff',
@@ -64,15 +112,25 @@ function sse(res) {
   return (type, data) => { if (!res.writableEnded) res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`); };
 }
 
-/** Only this computer, and only pages served by this server. */
-function allowed(req) {
+/** Only this computer, same-origin pages, and authenticated local sessions. */
+function isLoopbackHost(req) {
   const host = String(req.headers.host || '');
-  if (!/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host)) return false;
+  return /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/.test(host);
+}
+
+function allowed(req, url) {
+  if (!isLoopbackHost(req)) return false;
   const site = req.headers['sec-fetch-site'];
   if (site === 'cross-site' || site === 'same-site') return false;
   const origin = req.headers.origin;
-  if (!origin) return true;
-  try { return origin === new URL(`http://${host}`).origin; } catch { return false; }
+  if (origin) {
+    try {
+      if (origin !== new URL(`http://${req.headers.host}`).origin) return false;
+    } catch { return false; }
+  }
+  // Allow minimal unauthenticated liveness check on loopback for launcher script.
+  if (url && url.pathname === '/api/health' && req.method === 'GET') return true;
+  return hasValidSession(req);
 }
 
 function nameFromSource(source) {
@@ -190,7 +248,9 @@ async function api(req, res, url) {
   const method = req.method;
   const route = parts.slice(1);
 
-  if (route[0] === 'health') return send(res, 200, { app: 'safe4wiki', version: 1, dataDir: store.HOME });
+  if (route[0] === 'health') {
+    return send(res, 200, hasValidSession(req) ? { app: 'safe4wiki', version: 1, dataDir: store.HOME } : { app: 'safe4wiki', version: 1 });
+  }
 
   if (route[0] === 'settings' && route.length === 1) {
     if (method === 'GET') return send(res, 200, store.publicSettings(store.loadSettings()));
@@ -220,17 +280,39 @@ async function api(req, res, url) {
       profile.apiKey = savedKey;
     }
     delete profile.hasKey;
+    // Reject unsaved transient env: references unless they match the saved profile's exact baseUrl & apiKey.
+    if (typeof profile.apiKey === 'string' && profile.apiKey.startsWith('env:')) {
+      const sameSavedEnv = savedKey === profile.apiKey && (saved.baseUrl || '') === (profile.baseUrl || '');
+      if (!sameSavedEnv && !resolveApiKey(profile.apiKey)) {
+        return fail(res, 400, 'Environment variable references are restricted to standard LLM API key names.');
+      }
+      if (!sameSavedEnv && body.profile && body.profile.baseUrl && saved.baseUrl && body.profile.baseUrl !== saved.baseUrl) {
+        return fail(res, 400, 'Save the updated base URL before testing an environment API key reference.');
+      }
+    }
     if (route[1] === 'test') {
       const started = Date.now();
+      let testCwd = null;
       try {
+        if (profile.provider === 'agent-cli') {
+          const cmd = String(profile.command || '').trim();
+          const savedCmd = String(saved.command || '').trim();
+          if (!ALLOWED_TEST_CLIS.has(cmd) && (!savedCmd || cmd !== savedCmd)) {
+            return fail(res, 400, `Save the custom CLI profile before testing arbitrary commands (${cmd || 'empty'}).`);
+          }
+        }
+        testCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'safe4wiki-test-'));
         const testRetries = (profile.provider === 'agent-cli' && profile.command === 'zcode') ? 1 : 0;
-        const r = await chatDetailed({ ...profile, cwd: os.tmpdir() }, [{ role: 'user', content: 'Reply with exactly one word: ready' }], { retries: testRetries, maxTokens: 64, timeoutMs: 120000, cwd: os.tmpdir() });
+        const r = await chatDetailed({ ...profile, cwd: testCwd }, [{ role: 'user', content: 'Reply with exactly one word: ready' }], { retries: testRetries, maxTokens: 64, timeoutMs: 120000, cwd: testCwd });
         const reply = String(r.content || '').trim();
         if (!/\bready\b/i.test(reply) && reply.length > 40) {
           return fail(res, 400, `Model did not follow the test prompt (check CLI arguments / stdin). Replied: “${reply.slice(0, 180)}”`);
         }
         return send(res, 200, { ok: true, reply: reply.slice(0, 200), ms: Date.now() - started });
       } catch (err) { return fail(res, 400, err.message.slice(0, 500)); }
+      finally {
+        if (testCwd) { try { fs.rmSync(testCwd, { recursive: true, force: true }); } catch { /* ignore */ } }
+      }
     }
     if (route[1] === 'list') {
       try {
@@ -395,14 +477,8 @@ async function api(req, res, url) {
       }
       const rawRel = String(url.searchParams.get('path') || '').replace(/\\/g, '/').replace(/^\/+/, '');
       if (!rawRel || rawRel.includes('\0')) return fail(res, 400, 'Missing file path');
-      const isSensitiveName = name => {
-        const b = String(name || '').toLowerCase();
-        return b === '.env'
-          || (b.startsWith('.env.') && !/^\.env\.(example|sample|template)$/.test(b))
-          || /\.(pem|key|p12|pfx)$/.test(b)
-          || /^id_(rsa|ed25519|ecdsa)/.test(b);
-      };
-      if (isSensitiveName(path.basename(rawRel))) {
+      const isBlockedRel = relPath => relPath.split('/').some(seg => seg === '.git') || isSensitiveName(path.basename(relPath));
+      if (isBlockedRel(rawRel)) {
         return fail(res, 403, 'Sensitive files cannot be previewed');
       }
       let repoRoot; let realTarget;
@@ -416,7 +492,8 @@ async function api(req, res, url) {
       if (realTarget !== repoRoot && !realTarget.startsWith(`${repoRoot}${path.sep}`)) {
         return fail(res, 403, 'Path outside repository');
       }
-      if (isSensitiveName(path.basename(realTarget))) {
+      const relFromRoot = path.relative(repoRoot, realTarget).split(path.sep).join('/');
+      if (isBlockedRel(relFromRoot)) {
         return fail(res, 403, 'Sensitive files cannot be previewed');
       }
       const st = fs.statSync(realTarget);
@@ -503,7 +580,7 @@ async function api(req, res, url) {
   if (route[0] === 'export' && route[1] === 'pdf' && method === 'POST') {
     const body = await readBody(req);
     try {
-      const pdf = await printPdf({ port: PORT, owner: String(body.owner), repo: String(body.repo), paper: body.paper === 'Letter' ? 'Letter' : 'A4', page: body.page ? String(body.page) : undefined });
+      const pdf = await printPdf({ port: PORT, owner: String(body.owner), repo: String(body.repo), paper: body.paper === 'Letter' ? 'Letter' : 'A4', page: body.page ? String(body.page) : undefined, sessionToken: SESSION_TOKEN });
       return send(res, 200, Buffer.from(pdf), { 'content-type': 'application/pdf', 'content-disposition': `attachment; filename="${store.safePart(body.owner)}-${store.safePart(body.repo)}.pdf"` });
     } catch (err) { return fail(res, err.code === 'no_browser' ? 501 : 500, err.message, { code: err.code }); }
   }
@@ -513,12 +590,20 @@ async function api(req, res, url) {
     const w = body.wiki || {};
     const fmt = body.format || 'single';
     if (fmt === 'single') {
-      const html = await exportSingleHtml({ port: PORT, wiki: w });
+      const html = await exportSingleHtml({ port: PORT, wiki: w, sessionToken: SESSION_TOKEN });
       const filename = `${store.safePart(w.owner)}-${store.safePart(w.repo)}-docs.html`;
       if (body.folder) {
         const folder = path.resolve(String(body.folder).replace(/^~(?=\/|$)/, os.homedir()));
+        if (fs.existsSync(folder) && fs.lstatSync(folder).isSymbolicLink()) {
+          return fail(res, 400, 'Refusing to export into a symbolic link folder.');
+        }
         fs.mkdirSync(folder, { recursive: true });
         const dest = path.join(folder, filename);
+        try {
+          if (fs.lstatSync(dest).isSymbolicLink()) {
+            return fail(res, 400, 'Refusing to overwrite a symbolic link target file.');
+          }
+        } catch { /* dest does not exist yet */ }
         fs.writeFileSync(dest, html, 'utf8');
         return send(res, 200, { file: dest, folder });
       }
@@ -529,6 +614,9 @@ async function api(req, res, url) {
     }
     if (fmt === 'folder') {
       const folder = body.folder ? path.resolve(String(body.folder).replace(/^~(?=\/|$)/, os.homedir())) : path.join(store.HOME, 'exports', `${store.safePart(w.owner)}-${store.safePart(w.repo)}`);
+      if (fs.existsSync(folder) && fs.lstatSync(folder).isSymbolicLink()) {
+        return fail(res, 400, 'Refusing to export into a symbolic link folder.');
+      }
       if (fs.existsSync(folder) && fs.readdirSync(folder).length && !fs.existsSync(path.join(folder, 'wiki-data.js'))) {
         return fail(res, 400, 'That folder already has other files in it. Choose an empty folder.');
       }
@@ -549,7 +637,7 @@ async function api(req, res, url) {
     const settings = store.loadSettings();
     const target = { ...(body.target || {}) };
     const saved = settings.publish || {};
-    if (!target.token && saved.token && target.hasToken && target.method === saved.method) target.token = saved.token;
+    if (!target.token && saved.token && target.hasToken && store.samePublishDestination(saved, target)) target.token = saved.token;
     delete target.hasToken;
     settings.publish = { ...target };
     store.saveSettings(settings);
@@ -580,7 +668,32 @@ function pickFolder() {
 
 /* ---------------- static ---------------- */
 
+const STATIC_SECURITY_HEADERS = {
+  'x-frame-options': 'DENY',
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'no-referrer',
+  'content-security-policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'",
+};
+
+const AUTH_PAGE_HTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Safe4wiki — Session Unlock</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0a0c11;color:#eef1f6;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif}.card{max-width:460px;width:90%;padding:28px;border-radius:14px;border:1px solid rgba(226,188,108,.25);background:#12151e}h1{margin:0 0 8px;font-size:20px;color:#f2d896}p{margin:0 0 16px;font-size:14px;line-height:1.5;color:#9da7ba}code{color:#e8cc8a;font-size:12.5px}form{display:flex;gap:8px}input{flex:1;padding:10px 12px;border-radius:8px;border:1px solid #2b3244;background:#0b0e15;color:#fff;font-family:ui-monospace,Menlo,monospace;font-size:13px}button{padding:10px 16px;border-radius:8px;border:0;background:#d8ae58;color:#0b0e15;font-weight:700;cursor:pointer}</style></head><body><div class="card"><h1>Safe4wiki Local Session</h1><p>Open the launch link printed in your terminal, or paste the local session token from <code>~/.repowiki/.session-token</code>:</p><form method="GET" action="/"><input name="token" type="password" placeholder="Paste 64-char session token" autocomplete="off" required><button type="submit">Unlock</button></form></div></body></html>`;
+
 function serveStatic(req, res, url) {
+  // Exchange one-time ?token=<SESSION_TOKEN> on loopback navigation for an HttpOnly SameSite=Strict cookie
+  // and immediately redirect to strip the token from the URL bar and browser history.
+  const qToken = url.searchParams.get('token');
+  const site = req.headers['sec-fetch-site'];
+  if (qToken && isLoopbackHost(req) && site !== 'cross-site' && site !== 'same-site' && validSessionToken(qToken)) {
+    const cleanParams = new URLSearchParams(url.searchParams);
+    cleanParams.delete('token');
+    const cleanPath = `${url.pathname}${cleanParams.toString() ? '?' + cleanParams.toString() : ''}`;
+    res.writeHead(302, {
+      ...STATIC_SECURITY_HEADERS,
+      'set-cookie': `${SESSION_COOKIE}=${SESSION_TOKEN}; HttpOnly; SameSite=Strict; Path=/`,
+      location: cleanPath.startsWith('/') && !cleanPath.startsWith('//') ? cleanPath : '/',
+      'cache-control': 'no-store',
+    });
+    return res.end();
+  }
   let rel;
   try { rel = decodeURIComponent(url.pathname); } catch { return fail(res, 400, 'Malformed URL'); }
   const file = path.resolve(DIST, `.${rel}`);
@@ -596,11 +709,25 @@ function serveStatic(req, res, url) {
     target = path.join(DIST, 'index.html');
   }
   if (!fs.existsSync(target)) return send(res, 500, 'The app is not built yet. Run: npm run build');
+  try {
+    const realDist = fs.realpathSync(DIST);
+    const realTarget = fs.realpathSync(target);
+    if (realTarget !== realDist && !realTarget.startsWith(`${realDist}${path.sep}`)) {
+      return fail(res, 403, 'Forbidden');
+    }
+    target = realTarget;
+  } catch { return fail(res, 404, 'Not found'); }
   const ext = path.extname(target);
-  res.writeHead(200, {
+  if (ext === '.html' && !hasValidSession(req)) {
+    res.writeHead(200, { ...STATIC_SECURITY_HEADERS, 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end(AUTH_PAGE_HTML);
+  }
+  const headers = {
+    ...STATIC_SECURITY_HEADERS,
     'content-type': MIME[ext] || 'application/octet-stream',
     'cache-control': target.includes(`${path.sep}assets${path.sep}`) ? 'public, max-age=31536000, immutable' : 'no-cache',
-  });
+  };
+  res.writeHead(200, headers);
   fs.createReadStream(target).pipe(res);
   rel = null;
   return undefined;
@@ -610,7 +737,7 @@ const server = http.createServer(async (req, res) => {
   let url;
   try { url = new URL(req.url, `http://${req.headers.host || 'localhost'}`); } catch { return fail(res, 400, 'Malformed URL'); }
   if (url.pathname.startsWith('/api/')) {
-    if (!allowed(req)) return fail(res, 403, 'Safe4wiki only accepts requests from this computer.');
+    if (!allowed(req, url)) return fail(res, 403, 'Safe4wiki only accepts authenticated requests from this computer.');
     try { return await api(req, res, url); } catch (err) {
       if (!res.headersSent) return fail(res, 500, err.message);
       try { res.end(); } catch { /* ignore */ }
@@ -623,7 +750,7 @@ const server = http.createServer(async (req, res) => {
 store.ensureDir(store.HOME);
 jobs.recoverInterrupted();
 server.listen(PORT, '127.0.0.1', () => {
-  const link = `http://localhost:${PORT}`;
+  const link = `http://localhost:${PORT}/?token=${SESSION_TOKEN}`;
   console.log(`Safe4wiki is running at ${link}\nData folder: ${store.HOME}\nPress Ctrl+C to stop.`);
   if (!process.env.REPOWIKI_NO_OPEN && process.argv.includes('--open')) {
     const opener = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer' : 'xdg-open';

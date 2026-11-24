@@ -611,3 +611,119 @@ test('security hardening: XSS fallback sanitizer, untrusted repo .env isolation,
     /Invalid Git repository URL/i
   );
 });
+
+test('security audit v1.1.1 regressions: symlinks, inRawBlock HTML escape, secret retargeting, env allowlist, SSH allowlist, RAG/scan filters, and linear globs', async () => {
+  const { scanRepo } = require('../engine/scan');
+  const { loadWikiPlan } = require('../engine/plan-file');
+  const { loadConfig } = require('../engine/api');
+  const { compilePattern } = require('../engine/scope-filter');
+  const { safeManagedPath } = require('../engine/knowledge');
+  const { createRunDiagnostics } = require('../engine/run-diagnostics');
+  const { resolveApiKey } = require('../engine/providers');
+  const { hostOf, authUrl } = require('../git');
+
+  // 1. Unclosed <code> inRawBlock bypass must escape subsequent raw HTML tags
+  const rawBlockOut = await renderFallbackMarkdown('<code><div/data-check="raw-unescaped">hello');
+  assert.ok(!rawBlockOut.includes('<div/data-check='), 'raw HTML tag inside unclosed <code> must be escaped');
+
+  // 2. Symlinked README.md and wiki_plan.yaml inside repo must never be read
+  const tmpBase = fs.mkdtempSync(path.join(os.tmpdir(), 's4w-sec-'));
+  try {
+    const outsideSecret = path.join(tmpBase, 'settings.json');
+    fs.writeFileSync(outsideSecret, '{"apiKey":"SENTINEL_SECRET_991"}', { mode: 0o600 });
+    const repo = path.join(tmpBase, 'repo');
+    fs.mkdirSync(path.join(repo, 'sub/nested'), { recursive: true });
+    fs.symlinkSync(outsideSecret, path.join(repo, 'README.md'));
+    fs.symlinkSync(outsideSecret, path.join(repo, 'wiki_plan.yaml'));
+    fs.writeFileSync(path.join(repo, '.gitignore'), 'credentials.json\n**/*.pem\n');
+    fs.writeFileSync(path.join(repo, 'sub/.gitignore'), 'secrets.yaml\n');
+    fs.writeFileSync(path.join(repo, 'credentials.json'), '{"secret":"x"}');
+    fs.writeFileSync(path.join(repo, 'sub/secrets.yaml'), 'secret: x\n');
+    fs.writeFileSync(path.join(repo, 'server.key'), 'KEY\n');
+    fs.writeFileSync(path.join(repo, 'id_rsa'), 'SSH\n');
+    fs.writeFileSync(path.join(repo, 'sub/nested/prod.pem'), 'PEM\n');
+    fs.writeFileSync(path.join(repo, 'app.js'), 'export const ok = 1;\n');
+
+    const scan = scanRepo(repo);
+    assert.strictEqual(scan.keyFiles['README.md'], undefined, 'symlinked README.md must not be read');
+    assert.strictEqual(loadWikiPlan(repo), null, 'symlinked wiki_plan.yaml must not be read');
+
+    // 3. Sensitive and nested gitignored files excluded from scanRepo and rag.codeChunks
+    const scanPaths = scan.files.map(f => f.rel);
+    assert.ok(scanPaths.includes('app.js'));
+    assert.ok(!scanPaths.includes('server.key'));
+    assert.ok(!scanPaths.includes('id_rsa'));
+    assert.ok(!scanPaths.includes('sub/nested/prod.pem'));
+    assert.ok(!scanPaths.includes('sub/secrets.yaml'));
+    const ragFiles = [...new Set(rag.codeChunks(repo).map(c => c.file))];
+    assert.ok(!ragFiles.includes('credentials.json'));
+    assert.ok(!ragFiles.includes('sub/secrets.yaml'));
+
+    // 4. loadConfig must never load untrusted <repoDir>/repo-wiki.config.json
+    fs.writeFileSync(path.join(repo, 'repo-wiki.config.json'), JSON.stringify({ default: 'evil', models: {} }));
+    assert.throws(() => loadConfig({}, repo), /No config file found|Invalid JSON/);
+
+    // 5. createRunDiagnostics and safeManagedPath must reject symlinked ancestors and leaf files
+    const outEscape = path.join(tmpBase, 'escape');
+    fs.mkdirSync(outEscape, { recursive: true });
+    fs.symlinkSync(outEscape, path.join(repo, '.local-wiki'));
+    assert.throws(() => createRunDiagnostics(path.join(repo, '.local-wiki', 'en', 'runs'), { runId: 'r1' }), /symlink/i);
+    const leafDir = path.join(tmpBase, 'leaf-dir');
+    fs.mkdirSync(leafDir, { recursive: true });
+    fs.symlinkSync(outsideSecret, path.join(leafDir, 'overview.md'));
+    assert.strictEqual(safeManagedPath(leafDir, 'overview.md'), null, 'symlinked leaf file must be rejected');
+
+    // 6. exportSite must refuse writing through symlinked target files
+    const expDir = path.join(tmpBase, 'exp');
+    fs.mkdirSync(expDir, { recursive: true });
+    fs.symlinkSync(outsideSecret, path.join(expDir, '404.html'));
+    assert.throws(
+      () => exportSite({ owner: 'o', repo: 'r', pages: [{ path: 'overview.md', title: 'Hi', markdown: '# Hi' }] }, expDir),
+      /symbolic link/i
+    );
+
+    // 7. mergeSettings must drop saved apiKey/token when baseUrl or publish destination changes
+    const prevSettings = {
+      models: { m1: { provider: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-orig', model: 'gpt-x' } },
+      embedding: { enabled: true, baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-emb', model: 'emb' },
+      publish: { method: 'github', repoUrl: 'https://github.com/org/docs.git', token: 'ghp-orig' },
+    };
+    const merged = store.mergeSettings(prevSettings, {
+      models: { m1: { provider: 'openai', baseUrl: 'https://other.example/v1', apiKey: '', hasKey: true, model: 'gpt-x' } },
+      embedding: { enabled: true, baseUrl: 'https://other.example/v1', apiKey: '', hasKey: true, model: 'emb' },
+      publish: { method: 'github', repoUrl: 'https://other.example/a/b.git', token: '', hasToken: true },
+    });
+    assert.strictEqual(merged.models.m1.apiKey, undefined, 'model apiKey must not survive baseUrl change');
+    assert.strictEqual(merged.embedding.apiKey, undefined, 'embedding apiKey must not survive baseUrl change');
+    assert.strictEqual(merged.publish.token, undefined, 'publish token must not survive repoUrl change');
+
+    // 8. resolveApiKey env: allowlist blocks non-LLM variables
+    process.env.AWS_SECRET_ACCESS_KEY = 'dummy-aws';
+    process.env.OPENAI_API_KEY = 'dummy-openai';
+    try {
+      assert.strictEqual(resolveApiKey('env:AWS_SECRET_ACCESS_KEY'), '');
+      assert.strictEqual(resolveApiKey('env:OPENAI_API_KEY'), 'dummy-openai');
+    } finally {
+      delete process.env.AWS_SECRET_ACCESS_KEY;
+      delete process.env.OPENAI_API_KEY;
+    }
+
+    // 9. SSH publish strict allowlists reject trailing ':', '@', and brace expansion
+    const w = { owner: 'o', repo: 'r', pages: [{ path: 'overview.md', title: 'Hi', markdown: '# Hi' }] };
+    await assert.rejects(publish(w, { method: 'ssh', host: 'example.com:', remotePath: '/var/www/docs' }, () => {}), /Invalid server host/i);
+    await assert.rejects(publish(w, { method: 'ssh', host: 'u@-oTest=1', remotePath: '/var/www/docs' }, () => {}), /Invalid server host/i);
+    await assert.rejects(publish(w, { method: 'ssh', host: 'example.com', remotePath: '/var/www/{a,b}' }, () => {}), /Remote folder path/i);
+
+    // 10. Linear-time glob matcher handles adversarial wildcard pattern instantaneously
+    const pat = compilePattern('a*a*a*a*a*a*a*a*b');
+    const t0 = performance.now();
+    assert.strictEqual(pat('a'.repeat(120) + 'c'), false);
+    assert.ok(performance.now() - t0 < 50, 'linear-time glob matcher must not backtrack');
+
+    // 11. hostOf / authUrl handle multi-@ URLs via standard URL parser
+    assert.strictEqual(hostOf('https://a@github.com:443@collector.invalid/o/r.git'), 'collector.invalid');
+    assert.ok(!authUrl('https://a@github.com:443@collector.invalid/o/r.git', 'tok').includes('github.com:443@'));
+  } finally {
+    fs.rmSync(tmpBase, { recursive: true, force: true });
+  }
+});

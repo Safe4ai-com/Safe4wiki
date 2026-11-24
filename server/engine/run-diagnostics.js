@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { safeManagedPath } = require('./knowledge');
+const { assertNoSymlinkPath } = require('./run-transaction');
 
 function timestamp() {
   return new Date().toISOString();
@@ -52,10 +53,11 @@ function encodedPagePath(pagePath) {
 function createRunDiagnostics(runsRoot, options = {}) {
   const root = path.resolve(runsRoot);
   const runId = safeRunId(options.runId);
-  fs.mkdirSync(root, { recursive: true });
+  assertNoSymlinkPath(root, 'diagnostic runs root');
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const resolvedRun = safeManagedPath(root, runId);
   if (!resolvedRun) throw new Error('unsafe diagnostic run path');
-  fs.mkdirSync(resolvedRun.full);
+  fs.mkdirSync(resolvedRun.full, { mode: 0o700 });
   const dir = resolvedRun.full;
   const startedAt = timestamp();
   let summary = {

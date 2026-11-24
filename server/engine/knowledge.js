@@ -187,6 +187,10 @@ function safeManagedPath(baseDir, relativePath) {
     }
     parent = path.dirname(parent);
   }
+  try {
+    const leafStat = fs.lstatSync(full);
+    if (leafStat.isSymbolicLink()) return null;
+  } catch { /* leaf does not exist yet */ }
   return { rel, full };
 }
 

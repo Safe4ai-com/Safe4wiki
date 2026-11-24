@@ -58,22 +58,47 @@ const escapeHtml = s => String(s)
 
 const GITHUB_ICON = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
 const FILE_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>';
-// DOMPurify's standard URI rules, with the file links generated for VS Code.
-const ALLOWED_URI = /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix):|vscode:\/\/file\/|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
+// Standard DOMPurify URI rules (no global vscode:// scheme; local file links
+// are validated against source.root explicitly below).
+const BASE_ALLOWED_URI = /^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i;
+
+function normalizeSafeRel(file) {
+  const raw = String(file || '').replace(/\\/g, '/').replace(/^\/+/, '');
+  const parts = [];
+  for (const seg of raw.split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') return null; // reject upward traversal outside repository root
+    parts.push(seg);
+  }
+  return parts.length ? parts.join('/') : null;
+}
+
+function escapeRegExp(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function localVscodePrefix(root) {
+  const norm = String(root || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  if (!norm) return '';
+  const encoded = norm.split('/').map(encodeURIComponent).join('/');
+  return `vscode://file${encoded.startsWith('/') ? '' : '/'}${encoded}/`;
+}
 
 /** Link to a file (and line range) in the wiki's source. */
 export function sourceHref(source, file, start, end) {
   if (!source) return '#';
-  const clean = String(file).replace(/^\.?\//, '');
+  const clean = normalizeSafeRel(file);
+  if (!clean) return '#';
   if (source.type === 'github' && source.url) {
     const ref = source.commit || 'HEAD';
     const lines = start ? `#L${start}${end && end !== start ? `-L${end}` : ''}` : '';
     return `${source.url.replace(/\.git$/, '').replace(/\/+$/, '')}/blob/${ref}/${clean}${lines}`;
   }
   if (source.type === 'local' && source.root) {
-    const absolute = `${source.root}/${clean}`.replace(/\\/g, '/');
-    const encoded = absolute.split('/').map(encodeURIComponent).join('/');
-    return `vscode://file${encoded.startsWith('/') ? '' : '/'}${encoded}${start ? `:${start}` : ''}`;
+    const prefix = localVscodePrefix(source.root);
+    if (!prefix) return '#';
+    const encodedRel = clean.split('/').map(encodeURIComponent).join('/');
+    return `${prefix}${encodedRel}${start ? `:${start}` : ''}`;
   }
   return '#';
 }
@@ -210,8 +235,13 @@ export function renderPage(markdown, { source, resolveLink } = {}) {
     return `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
   };
   const raw = marked.parse(md, { renderer, gfm: true, async: false });
+  const vscodePrefix = source && source.type === 'local' ? localVscodePrefix(source.root) : '';
+  const allowedUri = vscodePrefix
+    ? new RegExp(`^(?:${escapeRegExp(vscodePrefix)}(?!.*(?:^|\\/)\\.\\.(?:\\/|$))|(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|matrix):|[^a-z]|[a-z+.\\-]+(?:[^a-z+.\\-:]|$))`, 'i')
+    : BASE_ALLOWED_URI;
   const html = DOMPurify.sanitize(raw, {
-    ALLOWED_URI_REGEXP: ALLOWED_URI,
+    ALLOWED_URI_REGEXP: allowedUri,
+    SANITIZE_NAMED_PROPS: true,
     ADD_ATTR: ['target', 'data-diagram', 'open', 'data-file', 'data-start', 'data-end'],
     ADD_TAGS: ['details', 'summary'],
   });

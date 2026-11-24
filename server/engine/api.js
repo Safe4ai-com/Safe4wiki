@@ -103,9 +103,10 @@ function loadDotenv(_repoDir, onEvent = null) {
 }
 
 function loadConfig(args, repoDir) {
+  // Never load config files from an untrusted indexed repository (repoDir);
+  // only explicit caller-supplied config paths or the app's own config.json.
   const candidates = [
     args.config || args.configPath,
-    path.join(repoDir, 'repo-wiki.config.json'),
     path.join(__dirname, '..', 'config.json'),
   ].filter(Boolean);
   for (const p of candidates) {
@@ -1489,9 +1490,15 @@ async function modifyWiki(repoDir, options = {}, onEvent = () => {}) {
   const safePagePath = canonicalRelativePath(page.path, { markdown: true });
   if (!safePagePath) throw new ApiError('unknown_page', 'unsafe page path in catalog');
 
-  const livePagePath = path.join(liveOutDir, safePagePath);
+  const resolvedLive = safeManagedPath(liveOutDir, safePagePath);
+  if (!resolvedLive) throw new ApiError('unknown_page', 'unsafe or symlinked page path in catalog');
+  const livePagePath = resolvedLive.full;
   let currentMarkdown;
-  try { currentMarkdown = fs.readFileSync(livePagePath, 'utf8'); }
+  try {
+    const lst = fs.lstatSync(livePagePath);
+    if (lst.isSymbolicLink() || !lst.isFile()) throw new Error('not a regular file');
+    currentMarkdown = fs.readFileSync(livePagePath, 'utf8');
+  }
   catch { throw new ApiError('unknown_page', `published page file missing: ${page.path}`); }
 
   emit('run_started', { repo: repoDir, model: modelName, provider: profile.provider, modelId: profile.model || profile.modelPath, configPath, outDir: liveOutDir, mode: `modify:${operation}` });
